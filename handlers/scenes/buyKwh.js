@@ -5,7 +5,8 @@ const userService = require('../../services/userService');
 const offerService = require('../../services/offerService');
 const Announcement = require('../../models/announcement');
 const User = require('../../models/user');
-const { formatChargeRequest } = require('../../utils/formatters');
+const { formatSellAnnouncement, formatChargeRequest } = require('../../utils/formatters');
+const logger = require('../../utils/logger');
 
 // Crea la scena per il wizard
 const buyKwhScene = new Scenes.WizardScene(
@@ -47,7 +48,7 @@ const buyKwhScene = new Scenes.WizardScene(
       
       return ctx.wizard.next();
     } catch (err) {
-      console.error('Errore nel caricamento dell\'annuncio:', err);
+      logger.error('Errore nel caricamento dell\'annuncio:', err);
       await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
       return ctx.scene.leave();
     }
@@ -71,7 +72,7 @@ const buyKwhScene = new Scenes.WizardScene(
       await ctx.reply('A che ora vorresti ricaricare? (Inserisci l\'ora nel formato HH:MM, ad esempio 14:30)');
       return ctx.wizard.next();
     } catch (err) {
-      console.error('Errore nel processare la data:', err);
+      logger.error('Errore nel processare la data:', err);
       await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
       return ctx.scene.leave();
     }
@@ -91,7 +92,7 @@ const buyKwhScene = new Scenes.WizardScene(
       await ctx.reply('Quale brand di colonnina utilizzerai? (ad esempio Enel X, A2A, Be Charge...)');
       return ctx.wizard.next();
     } catch (err) {
-      console.error('Errore nel processare l\'ora:', err);
+      logger.error('Errore nel processare l\'ora:', err);
       await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
       return ctx.scene.leave();
     }
@@ -141,7 +142,7 @@ ${ctx.wizard.state.additionalInfo ? `ℹ️ *Info aggiuntive:* ${ctx.wizard.stat
       
       return ctx.wizard.next();
     } catch (err) {
-      console.error('Errore nella creazione dell\'anteprima:', err);
+      logger.error('Errore nella creazione dell\'anteprima:', err);
       await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
       return ctx.scene.leave();
     }
@@ -192,7 +193,7 @@ buyKwhScene.action('send_request', async (ctx) => {
     
     return ctx.scene.leave();
   } catch (err) {
-    console.error('Errore nell\'invio della richiesta:', err);
+    logger.error('Errore nell\'invio della richiesta:', err);
     await ctx.reply('❌ Si è verificato un errore durante l\'invio della richiesta. Per favore, riprova più tardi.');
     return ctx.scene.leave();
   }
