@@ -33,11 +33,14 @@ bot.start(commands.startCommand);
 bot.command('vendi_kwh', commands.sellKwhCommand);
 bot.command('le_mie_ricariche', commands.myChargesCommand);
 bot.command('profilo', commands.profileCommand);
+bot.command('help', commands.helpCommand);
 bot.command('avvio_ricarica', commands.startChargeCommand);
+bot.command('update_commands', commands.updateBotCommandsCommand);
 
 // Registra i gestori delle callback
 bot.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
-bot.action(/connector_(.+)/, callbacks.connectorTypeCallback);
+// Modificato da connector_ a current_ per corrispondere al pattern nella scene
+bot.action(/current_(.+)/, callbacks.connectorTypeCallback);
 bot.action('publish_sell', callbacks.publishSellCallback);
 bot.action('cancel_sell', callbacks.cancelSellCallback);
 bot.action('accept_conditions', callbacks.acceptConditionsCallback);
