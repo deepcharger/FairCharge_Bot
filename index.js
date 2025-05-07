@@ -28,11 +28,6 @@ bot.use((ctx, next) => {
 bot.use(middleware.session());
 bot.use(stage.middleware());
 
-// Middleware per la gestione degli errori
-bot.catch((err, ctx) => {
-  logger.error(`Errore per ${ctx.updateType}:`, err);
-});
-
 // Registra i gestori dei comandi
 bot.start(commands.startCommand);
 bot.command('vendi_kwh', commands.sellKwhCommand);
@@ -79,6 +74,11 @@ bot.on('text', middleware.textMessageHandler);
 // Gestione dei messaggi con foto
 bot.on('photo', middleware.photoMessageHandler);
 
+// Gestione degli errori
+bot.catch((err, ctx) => {
+  logger.error(`Errore per ${ctx.updateType}:`, err);
+});
+
 // Avvia il bot
 bot.launch().then(() => {
   logger.info('Bot avviato correttamente!');
@@ -88,10 +88,10 @@ bot.launch().then(() => {
 
 // Enable graceful stop
 process.once('SIGINT', () => {
-  logger.info('Interruzione del bot (SIGINT)');
+  logger.info('Bot terminato (SIGINT)');
   bot.stop('SIGINT');
 });
 process.once('SIGTERM', () => {
-  logger.info('Interruzione del bot (SIGTERM)');
+  logger.info('Bot terminato (SIGTERM)');
   bot.stop('SIGTERM');
 });
