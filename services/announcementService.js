@@ -1,10 +1,23 @@
 // Servizio per la gestione degli annunci
-const { bot, SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = require('../config/bot');
 const Announcement = require('../models/announcement');
 const User = require('../models/user');
 const { formatSellAnnouncement } = require('../utils/formatters');
 const logger = require('../utils/logger');
 const { Markup } = require('telegraf');
+
+// Evitare dipendenze circolari importando il bot on-demand
+let botModule = null;
+
+/**
+ * Ottiene il modulo del bot e assicura che sia caricato
+ * @returns {Object} Il modulo del bot con bot e configurazioni
+ */
+const getBotModule = () => {
+  if (!botModule) {
+    botModule = require('../config/bot');
+  }
+  return botModule;
+};
 
 /**
  * Crea un nuovo annuncio di vendita
@@ -45,6 +58,8 @@ const createSellAnnouncement = async (announcementData, userId) => {
  */
 const publishAnnouncement = async (announcement, user) => {
   try {
+    const { bot, SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = getBotModule();
+    
     const topicId = announcement.type === 'sell' ? 
       SELL_GROUPS_CONFIG.topicId : 
       BUY_GROUPS_CONFIG.topicId;
@@ -109,6 +124,8 @@ const archiveAnnouncement = async (announcementId) => {
     // Elimina il messaggio dal topic se presente
     if (announcement.messageId) {
       try {
+        const { bot, SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = getBotModule();
+        
         const topicId = announcement.type === 'sell' ? 
           SELL_GROUPS_CONFIG.topicId : 
           BUY_GROUPS_CONFIG.topicId;
