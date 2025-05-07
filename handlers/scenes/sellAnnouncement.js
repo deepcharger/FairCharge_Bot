@@ -21,17 +21,15 @@ const sellAnnouncementScene = new Scenes.WizardScene(
     ctx.wizard.state.price = ctx.message.text;
     logger.debug(`Prezzo impostato: ${ctx.wizard.state.price}`);
     
-    // Assicuriamoci che i bottoni siano correttamente definiti
-    const keyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback('AC', 'current_AC'),
-        Markup.button.callback('DC', 'current_DC')
-      ],
-      [Markup.button.callback('Entrambe (AC e DC)', 'current_both')]
-    ]);
-    
+    // Utilizzo Markup.inlineKeyboard per i bottoni
     await ctx.reply('Che tipo di corrente offri?', {
-      reply_markup: keyboard
+      reply_markup: Markup.inlineKeyboard([
+        [
+          Markup.button.callback('AC', 'current_AC'),
+          Markup.button.callback('DC', 'current_DC')
+        ],
+        [Markup.button.callback('Entrambe (AC e DC)', 'current_both')]
+      ])
     });
     
     return ctx.wizard.next();
@@ -116,7 +114,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
   }
 );
 
-// Gestori delle callback per il wizard - Nota che abbiamo cambiato connector_ in current_
+// Gestori delle callback per il wizard - Cambiato connector_ con current_
 sellAnnouncementScene.action(/current_(.+)/, async (ctx) => {
   const currentType = ctx.match[1];
   ctx.wizard.state.currentType = currentType;
@@ -154,10 +152,10 @@ sellAnnouncementScene.action('publish_sell', async (ctx) => {
       await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
     }
     
-    // Assicurati che il tipo di corrente venga trasferito correttamente al campo connectorType
+    // Crea un nuovo annuncio
     const announcementData = {
       price: ctx.wizard.state.price,
-      connectorType: ctx.wizard.state.currentType, // Usa currentType al posto di connectorType
+      connectorType: ctx.wizard.state.currentType, // Usa currentType invece di connectorType
       brand: ctx.wizard.state.brand,
       location: ctx.wizard.state.location,
       nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'nessuno' ? '' : ctx.wizard.state.nonActivatableBrands,
