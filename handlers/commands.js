@@ -6,6 +6,7 @@ const { formatUserProfile, formatOfferListItem } = require('../utils/formatters'
 const User = require('../models/user');
 const Transaction = require('../models/transaction');
 const moment = require('moment');
+const logger = require('../utils/logger');
 
 /**
  * Gestisce il comando /start
@@ -13,6 +14,11 @@ const moment = require('moment');
  */
 const startCommand = async (ctx) => {
   try {
+    logger.info(`Comando /start ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
     await userService.registerUser(ctx.from);
     
     await ctx.reply(`
@@ -29,8 +35,10 @@ Se hai domande, contatta @admin_username.
 `, {
       parse_mode: 'Markdown'
     });
+    
+    logger.debug(`Messaggio di benvenuto inviato a ${ctx.from.id}`);
   } catch (err) {
-    console.error('Errore nel comando start:', err);
+    logger.error(`Errore nel comando start per utente ${ctx.from.id}:`, err);
     await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
@@ -40,6 +48,11 @@ Se hai domande, contatta @admin_username.
  * @param {Object} ctx - Contesto Telegraf
  */
 const sellKwhCommand = (ctx) => {
+  logger.info(`Comando /vendi_kwh ricevuto da ${ctx.from.id}`, {
+    userId: ctx.from.id,
+    username: ctx.from.username
+  });
+  
   return ctx.scene.enter('SELL_ANNOUNCEMENT_WIZARD');
 };
 
@@ -49,12 +62,18 @@ const sellKwhCommand = (ctx) => {
  */
 const myChargesCommand = async (ctx) => {
   try {
+    logger.info(`Comando /le_mie_ricariche ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
     const user = await userService.registerUser(ctx.from);
     
     // Recupera le offerte organizzate per stato
     const offers = await offerService.getActiveOffers(user.userId);
     
     if (Object.values(offers).flat().length === 0) {
+      logger.debug(`Nessuna ricarica attiva per utente ${ctx.from.id}`);
       await ctx.reply('Non hai ricariche attive al momento.');
       return;
     }
@@ -145,6 +164,8 @@ const myChargesCommand = async (ctx) => {
     const sendCategoryMessage = async (title, offersList, icon) => {
       if (offersList.length === 0) return;
       
+      logger.debug(`Invio lista di ${offersList.length} ricariche con stato "${title}" a ${ctx.from.id}`);
+      
       let text = `*${icon} ${title}:*\n`;
       
       for (let i = 0; i < offersList.length; i++) {
@@ -199,8 +220,10 @@ const myChargesCommand = async (ctx) => {
     if (offers.cancelled.length > 0) {
       await sendCategoryMessage('Annullate', offers.cancelled, '❌');
     }
+    
+    logger.info(`Liste ricariche inviate a ${ctx.from.id}`);
   } catch (err) {
-    console.error('Errore nel recupero delle ricariche:', err);
+    logger.error(`Errore nel recupero delle ricariche per utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
@@ -211,6 +234,11 @@ const myChargesCommand = async (ctx) => {
  */
 const profileCommand = async (ctx) => {
   try {
+    logger.info(`Comando /profilo ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
     // Ottieni il profilo dell'utente
     const userProfile = await userService.getUserProfile(ctx.from.id);
     
@@ -223,8 +251,9 @@ const profileCommand = async (ctx) => {
     );
     
     await ctx.reply(profileText, { parse_mode: 'Markdown' });
+    logger.debug(`Profilo inviato a ${ctx.from.id}`);
   } catch (err) {
-    console.error('Errore nel recupero del profilo:', err);
+    logger.error(`Errore nel recupero del profilo per utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
@@ -235,12 +264,19 @@ const profileCommand = async (ctx) => {
  */
 const startChargeCommand = async (ctx) => {
   try {
+    logger.info(`Comando /avvio_ricarica ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      messageText: ctx.message.text
+    });
+    
     const user = await userService.registerUser(ctx.from);
     
     // Verifica che l'utente sia l'admin
     const adminId = 123456789; // Sostituisci con il tuo ID Telegram
     
     if (user.userId !== adminId) {
+      logger.warn(`Tentativo non autorizzato di usare /avvio_ricarica da parte di ${ctx.from.id}`);
       await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
       return;
     }
@@ -248,11 +284,13 @@ const startChargeCommand = async (ctx) => {
     // Estrai il parametro username
     const text = ctx.message.text.split(' ');
     if (text.length < 2) {
+      logger.warn(`Comando /avvio_ricarica usato con formato errato da ${ctx.from.id}`);
       await ctx.reply('⚠️ Formato corretto: /avvio_ricarica username o ID');
       return;
     }
     
     const targetUser = text[1].replace('@', ''); // Rimuovi @ se presente
+    logger.debug(`Ricerca utente target: ${targetUser}`);
     
     // Cerca l'utente target
     let seller;
@@ -265,15 +303,22 @@ const startChargeCommand = async (ctx) => {
     }
     
     if (!seller) {
+      logger.warn(`Utente ${targetUser} non trovato per /avvio_ricarica`);
       await ctx.reply('❌ Utente non trovato.');
       return;
     }
     
     // Verifica se l'admin ha un saldo disponibile
     if (user.balance <= 0) {
+      logger.warn(`Tentativo di /avvio_ricarica con saldo insufficiente: ${user.balance} kWh`);
       await ctx.reply('❌ Non hai un saldo disponibile. Attendi di ricevere donazioni dai venditori.');
       return;
     }
+    
+    logger.info(`Avvio procedura ricarica manuale con venditore ${seller.userId}`, {
+      sellerName: seller.username || seller.firstName,
+      adminBalance: user.balance
+    });
     
     // Avvia una chat privata con l'admin per prenotare una ricarica
     await ctx.reply(`
@@ -291,7 +336,7 @@ Per prenotare una ricarica, inserisci i seguenti dettagli:
     
     await ctx.reply('1️⃣ In quale data vorresti ricaricare? (Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023)');
   } catch (err) {
-    console.error('Errore nel comando avvio_ricarica:', err);
+    logger.error(`Errore nel comando avvio_ricarica per utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
