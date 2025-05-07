@@ -5,6 +5,7 @@ const Donation = require('../models/donation');
 const { bot } = require('../config/bot');
 const { Markup } = require('telegraf');
 const logger = require('../utils/logger');
+const { ADMIN_USER_ID } = require('../config/admin');
 
 /**
  * Crea una nuova transazione
@@ -172,11 +173,11 @@ Il venditore ha confermato la ricarica di ${offer.kwhCharged} kWh.
 /**
  * Crea una nuova donazione
  * @param {Number} userId - ID dell'utente donatore
- * @param {Number} adminId - ID dell'amministratore
+ * @param {Number} adminId - ID dell'amministratore (valore predefinito da config/admin.js)
  * @param {Number} amount - Quantità di kWh donata
  * @returns {Promise<Object>} La nuova donazione
  */
-const createDonation = async (userId, adminId, amount) => {
+const createDonation = async (userId, adminId = ADMIN_USER_ID, amount) => {
   try {
     logger.info(`Creazione donazione da ${userId} a ${adminId}`, {
       userId,
