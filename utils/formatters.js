@@ -150,18 +150,19 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
  * @returns {String} Testo formattato del messaggio di benvenuto
  */
 const formatWelcomeMessage = () => {
+  // Messaggio di benvenuto con escape corretto - risolve il problema del parsing
   return `
 👋 *Benvenuto nel bot di compravendita kWh!*
 
 Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
 
 🔌 *Comandi disponibili:*
-/vendi\\_kwh - Crea un annuncio per vendere kWh
-/le\\_mie\\_ricariche - Visualizza le tue ricariche attive
+/vendi\_kwh - Crea un annuncio per vendere kWh
+/le\_mie\_ricariche - Visualizza le tue ricariche attive
 /profilo - Visualizza il tuo profilo
 /help - Mostra questo messaggio di aiuto
 
-Se hai domande, contatta @admin_username.
+Se hai domande, contatta @admin\_username.
 `;
 };
 
