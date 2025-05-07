@@ -107,14 +107,14 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
   if (sellAnnouncement && sellAnnouncement.status === 'active') {
     activeAnnouncementsText += '\n*Annuncio di vendita attivo:*\n';
     activeAnnouncementsText += `- Prezzo: ${sellAnnouncement.price}\n`;
-    activeAnnouncementsText += `- Tipo: ${sellAnnouncement.connectorType === 'both' ? 'AC e DC' : sellAnnouncement.connectorType}\n`;
+    activeAnnouncementsText += `- Corrente: ${sellAnnouncement.connectorType === 'both' ? 'AC e DC' : sellAnnouncement.connectorType}\n`;
     activeAnnouncementsText += `- Località: ${sellAnnouncement.location}\n`;
   }
   
   if (buyAnnouncement && buyAnnouncement.status === 'active') {
     activeAnnouncementsText += '\n*Annuncio di acquisto attivo:*\n';
     activeAnnouncementsText += `- Prezzo massimo: ${buyAnnouncement.price}\n`;
-    activeAnnouncementsText += `- Tipo: ${buyAnnouncement.connectorType === 'both' ? 'AC e DC' : buyAnnouncement.connectorType}\n`;
+    activeAnnouncementsText += `- Corrente: ${buyAnnouncement.connectorType === 'both' ? 'AC e DC' : buyAnnouncement.connectorType}\n`;
     activeAnnouncementsText += `- Località: ${buyAnnouncement.location}\n`;
   }
   
