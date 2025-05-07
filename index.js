@@ -6,6 +6,7 @@ const commands = require('./handlers/commands');
 const callbacks = require('./handlers/callbacks');
 const middleware = require('./handlers/middleware');
 const logger = require('./utils/logger');
+const { sceneCleanerMiddleware, setupPeriodicCleaner } = require('./utils/sceneCleaner');
 
 // Connessione al database
 connectToDatabase()
@@ -28,6 +29,12 @@ bot.use((ctx, next) => {
 bot.use(middleware.session());
 bot.use(stage.middleware());
 
+// Aggiungi il middleware di pulizia delle scene
+bot.use(sceneCleanerMiddleware());
+
+// Configura la pulizia periodica delle sessioni inattive
+setupPeriodicCleaner(bot);
+
 // Registra i gestori dei comandi
 bot.start(commands.startCommand);
 bot.command('vendi_kwh', commands.sellKwhCommand);
@@ -36,6 +43,7 @@ bot.command('profilo', commands.profileCommand);
 bot.command('help', commands.helpCommand);
 bot.command('avvio_ricarica', commands.startChargeCommand);
 bot.command('update_commands', commands.updateBotCommandsCommand);
+bot.command('annulla', commands.cancelCommand);
 
 // Registra i gestori delle callback
 bot.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
