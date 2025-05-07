@@ -2,7 +2,7 @@
 const { Markup } = require('telegraf');
 const userService = require('../services/userService');
 const offerService = require('../services/offerService');
-const { formatUserProfile, formatOfferListItem, formatWelcomeMessage } = require('../utils/formatters');
+const { formatUserProfile, formatOfferListItem } = require('../utils/formatters');
 const User = require('../models/user');
 const Transaction = require('../models/transaction');
 const moment = require('moment');
@@ -22,8 +22,20 @@ const startCommand = async (ctx) => {
     
     await userService.registerUser(ctx.from);
     
-    // Utilizza la funzione formatter con escape degli underscore
-    const welcomeMessage = formatWelcomeMessage();
+    // Messaggio di benvenuto direttamente inserito qui per evitare dipendenze
+    const welcomeMessage = `
+👋 *Benvenuto nel bot di compravendita kWh!*
+
+Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
+
+🔌 *Comandi disponibili:*
+/vendi\\_kwh - Crea un annuncio per vendere kWh
+/le\\_mie\\_ricariche - Visualizza le tue ricariche attive
+/profilo - Visualizza il tuo profilo
+/help - Mostra questo messaggio di aiuto
+
+Se hai domande, contatta @admin_username.
+`;
     
     await ctx.reply(welcomeMessage, {
       parse_mode: 'Markdown'
@@ -263,7 +275,19 @@ const helpCommand = async (ctx) => {
     });
     
     // Usa lo stesso formato del messaggio di benvenuto
-    const helpMessage = formatWelcomeMessage();
+    const helpMessage = `
+👋 *Bot di compravendita kWh*
+
+Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
+
+🔌 *Comandi disponibili:*
+/vendi\\_kwh - Crea un annuncio per vendere kWh
+/le\\_mie\\_ricariche - Visualizza le tue ricariche attive
+/profilo - Visualizza il tuo profilo
+/help - Mostra questo messaggio di aiuto
+
+Se hai domande, contatta @admin_username.
+`;
     
     await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
     logger.debug(`Messaggio di aiuto inviato a ${ctx.from.id}`);
