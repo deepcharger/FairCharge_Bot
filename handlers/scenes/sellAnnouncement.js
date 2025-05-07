@@ -16,17 +16,17 @@ const sellAnnouncementScene = new Scenes.WizardScene(
     });
     return ctx.wizard.next();
   },
-  // Passo 2: Tipo connettore
+  // Passo 2: Tipo corrente
   async (ctx) => {
     ctx.wizard.state.price = ctx.message.text;
     logger.debug(`Prezzo impostato: ${ctx.wizard.state.price}`);
     
-    await ctx.reply('Che tipo di connettore offri?', {
+    await ctx.reply('Che tipo di corrente offri?', {
       reply_markup: Markup.inlineKeyboard([
         [
           Markup.button.callback('AC', 'connector_AC'),
           Markup.button.callback('DC', 'connector_DC'),
-          Markup.button.callback('Entrambi (AC e DC)', 'connector_both')
+          Markup.button.callback('Entrambe (AC e DC)', 'connector_both')
         ]
       ])
     });
@@ -36,8 +36,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
   async (ctx) => {
     // Questo verrà gestito nel gestore delle callback
     if (!ctx.wizard.state.connectorType) {
-      logger.warn(`Utente ${ctx.from.id} non ha selezionato un tipo di connettore`);
-      await ctx.reply('Per favore, seleziona un tipo di connettore dalle opzioni.');
+      logger.warn(`Utente ${ctx.from.id} non ha selezionato un tipo di corrente`);
+      await ctx.reply('Per favore, seleziona un tipo di corrente dalle opzioni.');
       return;
     }
     
@@ -117,7 +117,7 @@ sellAnnouncementScene.action(/connector_(.+)/, async (ctx) => {
   const connectorType = ctx.match[1];
   ctx.wizard.state.connectorType = connectorType;
   
-  logger.debug(`Connettore selezionato: ${connectorType} per utente ${ctx.from.id}`);
+  logger.debug(`Tipo di corrente selezionato: ${connectorType} per utente ${ctx.from.id}`);
   await ctx.answerCbQuery(`Hai selezionato: ${connectorType}`);
   
   let connectorText;
@@ -126,10 +126,10 @@ sellAnnouncementScene.action(/connector_(.+)/, async (ctx) => {
   } else if (connectorType === 'DC') {
     connectorText = 'DC';
   } else if (connectorType === 'both') {
-    connectorText = 'Entrambi (AC e DC)';
+    connectorText = 'Entrambe (AC e DC)';
   }
   
-  await ctx.reply(`Tipo di connettore selezionato: ${connectorText}`);
+  await ctx.reply(`Tipo di corrente selezionato: ${connectorText}`);
   await ctx.wizard.steps[2](ctx);
 });
 
