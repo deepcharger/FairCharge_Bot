@@ -159,6 +159,7 @@ Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elet
 /vendi\\_kwh - Crea un annuncio per vendere kWh
 /le\\_mie\\_ricariche - Visualizza le tue ricariche attive
 /profilo - Visualizza il tuo profilo
+/help - Mostra questo messaggio di aiuto
 
 Se hai domande, contatta @admin_username.
 `;
