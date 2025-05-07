@@ -381,6 +381,7 @@ const updateBotCommandsCommand = async (ctx) => {
       { command: 'vendi_kwh', description: 'Crea un annuncio per vendere kWh' },
       { command: 'le_mie_ricariche', description: 'Visualizza le tue ricariche attive' },
       { command: 'profilo', description: 'Visualizza il tuo profilo' },
+      { command: 'annulla', description: 'Annulla la procedura in corso' },
       // Solo per admin, quindi non visibile agli utenti normali
       { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
       { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' }
@@ -397,6 +398,36 @@ const updateBotCommandsCommand = async (ctx) => {
   }
 };
 
+/**
+ * Gestisce il comando /annulla
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /annulla ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica se l'utente ha una scena attiva
+    if (ctx.session && ctx.session.__scenes && ctx.session.__scenes.current) {
+      const currentScene = ctx.session.__scenes.current;
+      
+      logger.debug(`Annullamento scena ${currentScene} per utente ${ctx.from.id}`);
+      
+      // Pulisci la scena e lo stato
+      await ctx.scene.leave();
+      
+      await ctx.reply(`❌ Hai annullato la procedura di "${currentScene}".`);
+    } else {
+      await ctx.reply('ℹ️ Non hai nessuna procedura attiva da annullare.');
+    }
+  } catch (err) {
+    logger.error(`Errore nel comando annulla per utente ${ctx.from.id}:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
 module.exports = {
   startCommand,
   sellKwhCommand,
@@ -404,5 +435,6 @@ module.exports = {
   profileCommand,
   helpCommand,
   startChargeCommand,
-  updateBotCommandsCommand
+  updateBotCommandsCommand,
+  cancelCommand
 };
