@@ -5,6 +5,7 @@ const Announcement = require('../models/announcement');
 const User = require('../models/user');
 const moment = require('moment');
 const { Markup } = require('telegraf');
+const logger = require('../utils/logger');
 
 /**
  * Crea una nuova offerta di ricarica
@@ -14,6 +15,15 @@ const { Markup } = require('telegraf');
  */
 const createOffer = async (offerData, announcementId = null) => {
   try {
+    logger.info(`Creazione offerta: ${offerData.buyerId} → ${offerData.sellerId}`, {
+      buyerId: offerData.buyerId,
+      sellerId: offerData.sellerId,
+      date: offerData.date,
+      time: offerData.time,
+      brand: offerData.brand,
+      announcementId: announcementId || 'nessuno'
+    });
+    
     // Crea l'oggetto offerta
     const newOffer = new Offer({
       announcementId: announcementId,
@@ -35,6 +45,7 @@ const createOffer = async (offerData, announcementId = null) => {
       .toDate();
     
     await newOffer.save();
+    logger.debug(`Offerta creata con ID: ${newOffer._id}`);
     
     // Se c'è un annuncio collegato, aggiungi l'offerta all'annuncio
     if (announcementId) {
@@ -42,12 +53,15 @@ const createOffer = async (offerData, announcementId = null) => {
       if (announcement) {
         announcement.offers.push(newOffer._id);
         await announcement.save();
+        logger.debug(`Offerta ${newOffer._id} aggiunta all'annuncio ${announcementId}`);
+      } else {
+        logger.warn(`Tentativo di collegare offerta ${newOffer._id} a un annuncio non esistente: ${announcementId}`);
       }
     }
     
     return newOffer;
   } catch (err) {
-    console.error('Errore nella creazione dell\'offerta:', err);
+    logger.error('Errore nella creazione dell\'offerta:', err);
     throw err;
   }
 };
@@ -61,6 +75,12 @@ const createOffer = async (offerData, announcementId = null) => {
  */
 const notifySellerAboutOffer = async (offer, buyer, announcement = null) => {
   try {
+    logger.info(`Invio notifica di nuova offerta al venditore ${offer.sellerId}`, {
+      offerId: offer._id,
+      buyerId: buyer.userId,
+      buyerName: buyer.username || buyer.firstName
+    });
+    
     // Prepara il testo della notifica
     let offerText = `
 🔋 *Nuova richiesta di ricarica* 🔋
@@ -90,8 +110,10 @@ ${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` :
         ]
       ])
     });
+    
+    logger.debug(`Notifica inviata al venditore ${offer.sellerId}`);
   } catch (err) {
-    console.error('Errore nell\'invio della notifica al venditore:', err);
+    logger.error(`Errore nell'invio della notifica al venditore ${offer.sellerId}:`, err);
     throw err;
   }
 };
@@ -105,10 +127,19 @@ ${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` :
  */
 const updateOfferStatus = async (offerId, newStatus, additionalData = {}) => {
   try {
+    logger.info(`Aggiornamento stato offerta ${offerId}: "${newStatus}"`, {
+      offerId,
+      newStatus,
+      additionalData
+    });
+    
     const offer = await Offer.findById(offerId);
     if (!offer) {
+      logger.warn(`Tentativo di aggiornare un'offerta non esistente: ${offerId}`);
       throw new Error('Offerta non trovata');
     }
+    
+    const oldStatus = offer.status;
     
     // Aggiorna lo stato
     offer.status = newStatus;
@@ -119,14 +150,16 @@ const updateOfferStatus = async (offerId, newStatus, additionalData = {}) => {
     });
     
     // Se lo stato è 'completed', imposta la data di completamento
-    if (newStatus === 'completed') {
+    if (newStatus === 'completed' && !offer.completedAt) {
       offer.completedAt = new Date();
     }
     
     await offer.save();
+    
+    logger.debug(`Stato offerta ${offerId} aggiornato: ${oldStatus} → ${newStatus}`);
     return offer;
   } catch (err) {
-    console.error('Errore nell\'aggiornamento dello stato dell\'offerta:', err);
+    logger.error(`Errore nell'aggiornamento dello stato dell'offerta ${offerId}:`, err);
     throw err;
   }
 };
@@ -138,6 +171,8 @@ const updateOfferStatus = async (offerId, newStatus, additionalData = {}) => {
  */
 const getActiveOffers = async (userId) => {
   try {
+    logger.info(`Recupero offerte attive per utente ${userId}`);
+    
     // Trova tutte le offerte non rifiutate per questo utente
     const offers = await Offer.find({
       $or: [
@@ -147,8 +182,10 @@ const getActiveOffers = async (userId) => {
       status: { $ne: 'rejected' }
     }).sort({ date: 1 });
     
+    logger.debug(`Recuperate ${offers.length} offerte per l'utente ${userId}`);
+    
     // Raggruppa le offerte per stato
-    return {
+    const groupedOffers = {
       pending: offers.filter(o => o.status === 'pending'),
       accepted: offers.filter(o => o.status === 'accepted'),
       readyToCharge: offers.filter(o => o.status === 'ready_to_charge'),
@@ -162,8 +199,15 @@ const getActiveOffers = async (userId) => {
       disputed: offers.filter(o => o.status === 'disputed'),
       cancelled: offers.filter(o => o.status === 'cancelled')
     };
+    
+    // Log delle quantità per ogni categoria
+    Object.keys(groupedOffers).forEach(key => {
+      logger.debug(`Offerte con stato "${key}": ${groupedOffers[key].length}`);
+    });
+    
+    return groupedOffers;
   } catch (err) {
-    console.error('Errore nel recupero delle offerte attive:', err);
+    logger.error(`Errore nel recupero delle offerte attive per utente ${userId}:`, err);
     throw err;
   }
 };
@@ -178,6 +222,13 @@ const getActiveOffers = async (userId) => {
  */
 const notifyUserAboutOfferUpdate = async (offer, targetUserId, message, keyboard = null) => {
   try {
+    logger.info(`Invio notifica per offerta ${offer._id} a ${targetUserId}`, {
+      offerId: offer._id,
+      targetUserId,
+      offerStatus: offer.status,
+      hasKeyboard: keyboard !== null
+    });
+    
     const options = {
       parse_mode: 'Markdown'
     };
@@ -187,8 +238,9 @@ const notifyUserAboutOfferUpdate = async (offer, targetUserId, message, keyboard
     }
     
     await bot.telegram.sendMessage(targetUserId, message, options);
+    logger.debug(`Notifica inviata con successo a ${targetUserId}`);
   } catch (err) {
-    console.error('Errore nell\'invio della notifica all\'utente:', err);
+    logger.error(`Errore nell'invio della notifica all'utente ${targetUserId}:`, err);
     throw err;
   }
 };
