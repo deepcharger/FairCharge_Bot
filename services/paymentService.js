@@ -4,6 +4,7 @@ const User = require('../models/user');
 const Donation = require('../models/donation');
 const { bot } = require('../config/bot');
 const { Markup } = require('telegraf');
+const logger = require('../utils/logger');
 
 /**
  * Crea una nuova transazione
@@ -12,6 +13,14 @@ const { Markup } = require('telegraf');
  */
 const createTransaction = async (offer) => {
   try {
+    logger.info(`Creazione transazione per offerta ${offer._id}`, {
+      offerId: offer._id,
+      sellerId: offer.sellerId,
+      buyerId: offer.buyerId,
+      kwhAmount: offer.kwhCharged,
+      totalAmount: offer.totalAmount
+    });
+    
     // Crea una nuova transazione
     const transaction = new Transaction({
       offerId: offer._id,
@@ -25,6 +34,7 @@ const createTransaction = async (offer) => {
     });
     
     await transaction.save();
+    logger.debug(`Transazione creata con ID: ${transaction._id}`);
     
     // Aggiorna i riferimenti negli utenti
     const buyer = await User.findOne({ userId: offer.buyerId });
@@ -33,16 +43,22 @@ const createTransaction = async (offer) => {
     if (buyer) {
       buyer.transactions.push(transaction._id);
       await buyer.save();
+      logger.debug(`Transazione ${transaction._id} aggiunta all'acquirente ${buyer.userId}`);
+    } else {
+      logger.warn(`Acquirente ${offer.buyerId} non trovato durante la creazione della transazione`);
     }
     
     if (seller) {
       seller.transactions.push(transaction._id);
       await seller.save();
+      logger.debug(`Transazione ${transaction._id} aggiunta al venditore ${seller.userId}`);
+    } else {
+      logger.warn(`Venditore ${offer.sellerId} non trovato durante la creazione della transazione`);
     }
     
     return transaction;
   } catch (err) {
-    console.error('Errore nella creazione della transazione:', err);
+    logger.error(`Errore nella creazione della transazione per offerta ${offer._id}:`, err);
     throw err;
   }
 };
@@ -55,6 +71,13 @@ const createTransaction = async (offer) => {
  */
 const handlePaymentWithBalance = async (offer, buyer) => {
   try {
+    logger.info(`Gestione pagamento con saldo per offerta ${offer._id}`, {
+      offerId: offer._id,
+      buyerId: buyer.userId,
+      totalAmount: offer.totalAmount,
+      currentBalance: buyer.balance
+    });
+    
     let balance = buyer.balance;
     let amountToPay = offer.totalAmount;
     let balanceUsed = 0;
@@ -64,9 +87,18 @@ const handlePaymentWithBalance = async (offer, buyer) => {
       balanceUsed = Math.min(balance, offer.totalAmount);
       amountToPay = Math.max(0, offer.totalAmount - balanceUsed);
       
+      logger.debug(`Utilizzo saldo per offerta ${offer._id}`, {
+        balanceBefore: balance,
+        balanceUsed,
+        amountToPay,
+        balanceAfter: balance - balanceUsed
+      });
+      
       // Aggiorna il saldo dell'utente
       buyer.balance -= balanceUsed;
       await buyer.save();
+    } else {
+      logger.debug(`Nessun saldo disponibile per offerta ${offer._id}, pagamento completo richiesto`);
     }
     
     return {
@@ -76,7 +108,7 @@ const handlePaymentWithBalance = async (offer, buyer) => {
       remainingBalance: buyer.balance
     };
   } catch (err) {
-    console.error('Errore nella gestione del pagamento con saldo:', err);
+    logger.error(`Errore nella gestione del pagamento con saldo per offerta ${offer._id}:`, err);
     throw err;
   }
 };
@@ -89,6 +121,14 @@ const handlePaymentWithBalance = async (offer, buyer) => {
  */
 const sendPaymentRequest = async (offer, paymentInfo) => {
   try {
+    logger.info(`Invio richiesta di pagamento per offerta ${offer._id}`, {
+      offerId: offer._id,
+      buyerId: offer.buyerId,
+      totalAmount: offer.totalAmount,
+      balanceUsed: paymentInfo.balanceUsed,
+      amountToPay: paymentInfo.amountToPay
+    });
+    
     // Calcola il prezzo per kWh
     const pricePerKwh = (offer.totalAmount / offer.kwhCharged).toFixed(2);
     
@@ -121,8 +161,10 @@ Il venditore ha confermato la ricarica di ${offer.kwhCharged} kWh.
         [Markup.button.callback('💸 Ho effettuato il pagamento', `payment_sent_${offer._id}`)]
       ])
     });
+    
+    logger.debug(`Richiesta di pagamento inviata all'acquirente ${offer.buyerId}`);
   } catch (err) {
-    console.error('Errore nell\'invio della richiesta di pagamento:', err);
+    logger.error(`Errore nell'invio della richiesta di pagamento per offerta ${offer._id}:`, err);
     throw err;
   }
 };
@@ -136,6 +178,12 @@ Il venditore ha confermato la ricarica di ${offer.kwhCharged} kWh.
  */
 const createDonation = async (userId, adminId, amount) => {
   try {
+    logger.info(`Creazione donazione da ${userId} a ${adminId}`, {
+      userId,
+      adminId,
+      amount
+    });
+    
     // Crea la donazione
     const donation = new Donation({
       userId,
@@ -144,17 +192,23 @@ const createDonation = async (userId, adminId, amount) => {
     });
     
     await donation.save();
+    logger.debug(`Donazione creata con ID: ${donation._id}`);
     
     // Aggiorna il saldo dell'admin
     const admin = await User.findOne({ userId: adminId });
     if (admin) {
+      const oldBalance = admin.balance;
       admin.balance += amount;
       await admin.save();
+      
+      logger.debug(`Saldo admin ${adminId} aggiornato: ${oldBalance} → ${admin.balance}`);
+    } else {
+      logger.warn(`Admin ${adminId} non trovato durante la creazione della donazione`);
     }
     
     return donation;
   } catch (err) {
-    console.error('Errore nella creazione della donazione:', err);
+    logger.error(`Errore nella creazione della donazione da ${userId} a ${adminId}:`, err);
     throw err;
   }
 };
@@ -167,9 +221,17 @@ const createDonation = async (userId, adminId, amount) => {
  */
 const notifyAdminAboutDonation = async (donation, donor) => {
   try {
+    logger.info(`Notifica admin ${donation.adminId} riguardo donazione ${donation._id}`, {
+      donationId: donation._id,
+      donorId: donor.userId,
+      donorName: donor.username || donor.firstName,
+      amount: donation.kwhAmount
+    });
+    
     // Recupera l'admin
     const admin = await User.findOne({ userId: donation.adminId });
     if (!admin) {
+      logger.warn(`Admin ${donation.adminId} non trovato durante la notifica della donazione`);
       throw new Error('Admin non trovato');
     }
     
@@ -188,8 +250,10 @@ Il tuo saldo attuale è di ${admin.balance.toFixed(2)} kWh.
 `, {
       parse_mode: 'Markdown'
     });
+    
+    logger.debug(`Notifica donazione inviata all'admin ${donation.adminId}`);
   } catch (err) {
-    console.error('Errore nella notifica all\'admin:', err);
+    logger.error(`Errore nella notifica all'admin ${donation.adminId} riguardo donazione ${donation._id}:`, err);
     throw err;
   }
 };
