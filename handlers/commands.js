@@ -2,11 +2,12 @@
 const { Markup } = require('telegraf');
 const userService = require('../services/userService');
 const offerService = require('../services/offerService');
-const { formatUserProfile, formatOfferListItem } = require('../utils/formatters');
+const { formatUserProfile, formatOfferListItem, formatWelcomeMessage } = require('../utils/formatters');
 const User = require('../models/user');
 const Transaction = require('../models/transaction');
 const moment = require('moment');
 const logger = require('../utils/logger');
+const { isAdmin } = require('../config/admin');
 
 /**
  * Gestisce il comando /start
@@ -21,18 +22,10 @@ const startCommand = async (ctx) => {
     
     await userService.registerUser(ctx.from);
     
-    await ctx.reply(`
-👋 Benvenuto nel bot di compravendita kWh!
-
-Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
-
-🔌 *Comandi disponibili:*
-/vendi_kwh - Crea un annuncio per vendere kWh
-/le_mie_ricariche - Visualizza le tue ricariche attive
-/profilo - Visualizza il tuo profilo
-
-Se hai domande, contatta @admin_username.
-`, {
+    // Utilizza la funzione formatter con escape degli underscore
+    const welcomeMessage = formatWelcomeMessage();
+    
+    await ctx.reply(welcomeMessage, {
       parse_mode: 'Markdown'
     });
     
@@ -259,6 +252,28 @@ const profileCommand = async (ctx) => {
 };
 
 /**
+ * Gestisce il comando /help
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const helpCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /help ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Usa lo stesso formato del messaggio di benvenuto
+    const helpMessage = formatWelcomeMessage();
+    
+    await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+    logger.debug(`Messaggio di aiuto inviato a ${ctx.from.id}`);
+  } catch (err) {
+    logger.error(`Errore nell'invio del messaggio di aiuto per utente ${ctx.from.id}:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+/**
  * Gestisce il comando /avvio_ricarica
  * @param {Object} ctx - Contesto Telegraf
  */
@@ -272,10 +287,8 @@ const startChargeCommand = async (ctx) => {
     
     const user = await userService.registerUser(ctx.from);
     
-    // Verifica che l'utente sia l'admin
-    const adminId = 123456789; // Sostituisci con il tuo ID Telegram
-    
-    if (user.userId !== adminId) {
+    // Verifica che l'utente sia l'admin usando la funzione isAdmin
+    if (!isAdmin(user.userId)) {
       logger.warn(`Tentativo non autorizzato di usare /avvio_ricarica da parte di ${ctx.from.id}`);
       await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
       return;
@@ -285,7 +298,7 @@ const startChargeCommand = async (ctx) => {
     const text = ctx.message.text.split(' ');
     if (text.length < 2) {
       logger.warn(`Comando /avvio_ricarica usato con formato errato da ${ctx.from.id}`);
-      await ctx.reply('⚠️ Formato corretto: /avvio_ricarica username o ID');
+      await ctx.reply('⚠️ Formato corretto: /avvio\\_ricarica username o ID');
       return;
     }
     
@@ -341,10 +354,55 @@ Per prenotare una ricarica, inserisci i seguenti dettagli:
   }
 };
 
+/**
+ * Gestisce il comando di aggiornamento comandi bot per admin
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const updateBotCommandsCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /update_commands ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    const user = await userService.registerUser(ctx.from);
+    
+    // Verifica che l'utente sia l'admin usando la funzione isAdmin
+    if (!isAdmin(user.userId)) {
+      logger.warn(`Tentativo non autorizzato di usare /update_commands da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Array dei comandi da impostare
+    const commands = [
+      { command: 'start', description: 'Avvia il bot' },
+      { command: 'help', description: 'Mostra i comandi disponibili' },
+      { command: 'vendi_kwh', description: 'Crea un annuncio per vendere kWh' },
+      { command: 'le_mie_ricariche', description: 'Visualizza le tue ricariche attive' },
+      { command: 'profilo', description: 'Visualizza il tuo profilo' },
+      // Solo per admin, quindi non visibile agli utenti normali
+      { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
+      { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' }
+    ];
+    
+    // Imposta i comandi per l'intera applicazione
+    await ctx.telegram.setMyCommands(commands);
+    
+    logger.info(`Comandi del bot aggiornati da admin ${ctx.from.id}`);
+    await ctx.reply('✅ I comandi del bot sono stati aggiornati con successo!');
+  } catch (err) {
+    logger.error(`Errore nell'aggiornamento dei comandi per utente ${ctx.from.id}:`, err);
+    await ctx.reply('❌ Si è verificato un errore durante l\'aggiornamento dei comandi. Per favore, riprova più tardi.');
+  }
+};
+
 module.exports = {
   startCommand,
   sellKwhCommand,
   myChargesCommand,
   profileCommand,
-  startChargeCommand
+  helpCommand,
+  startChargeCommand,
+  updateBotCommandsCommand
 };
