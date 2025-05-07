@@ -355,7 +355,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         if (!ctx.wizard.state.price || !ctx.wizard.state.currentType || !ctx.wizard.state.brand || !ctx.wizard.state.location) {
           logger.error(`Dati incompleti per l'annuncio dell'utente ${ctx.from.id}`);
           logger.debug(`Stato wizard: ${JSON.stringify(ctx.wizard.state)}`);
-          await ctx.reply('❌ Dati incompleti per l'annuncio. Riprova dal principio con /vendi_kwh');
+          await ctx.reply("❌ Dati incompleti per l'annuncio. Riprova dal principio con /vendi_kwh");
           return ctx.scene.leave();
         }
         
@@ -399,7 +399,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         return ctx.wizard.next();
       } catch (err) {
         logger.error(`Errore nella creazione dell'anteprima per utente ${ctx.from.id}:`, err);
-        await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+        await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
         return ctx.scene.leave();
       }
     } catch (err) {
