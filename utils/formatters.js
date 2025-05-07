@@ -1,5 +1,6 @@
 // Funzioni di formattazione messaggi
 const User = require('../models/user');
+const logger = require('./logger');
 
 /**
  * Formatta un annuncio di vendita
@@ -10,26 +11,34 @@ const User = require('../models/user');
 const formatSellAnnouncement = (announcement, user) => {
   let positivePercentage = user.getPositivePercentage();
   let feedbackText = positivePercentage ? 
-    `\n👍 Feedback positivo: ${positivePercentage}%` :
-    '\n👤 Nuovo venditore';
+    `(${positivePercentage}.0% positivi)` :
+    '(Nuovo venditore)';
   
-  let trustedBadge = '';
-  if (user.isTrustedSeller()) {
-    trustedBadge = ' ✅ Venditore affidabile';
+  let trustedBadgeEmoji = '';
+  let trustedBadgeText = '';
+  if (positivePercentage && positivePercentage >= 90) {
+    trustedBadgeEmoji = '🏆 🛡️';
+    trustedBadgeText = 'VENDITORE AFFIDABILE';
   }
 
+  const announcementId = announcement._id ? announcement._id.toString() : 'N/A';
+
   return `
-🔋 *VENDO kWh* 🔋
+*Vendita kWh sharing*
+🆔 *ID annuncio:* ${announcementId}
+👤 *Venditore:* @${user.username || user.firstName}
+${trustedBadgeEmoji} *${trustedBadgeText}* ${feedbackText}
 
-💰 *Prezzo:* ${announcement.price}
-🔌 *Tipo connettore:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-🏭 *Colonnina:* ${announcement.brand}
-📍 *Dove:* ${announcement.location}
-${announcement.nonActivatableBrands ? `⛔ *Non attivabile:* ${announcement.nonActivatableBrands}\n` : ''}
-${announcement.additionalInfo ? `ℹ️ *Info aggiuntive:* ${announcement.additionalInfo}\n` : ''}
-${feedbackText}${trustedBadge}
+💲 *Prezzo:* ${announcement.price}
+⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+✅ *Reti attivabili:* ${announcement.brand}
+🕒 *Disponibilità:* ${announcement.additionalInfo ? announcement.additionalInfo : 'Non specificata'}
+🗺️ *Zone:* ${announcement.location}
+${announcement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${announcement.nonActivatableBrands}\n` : ''}
+💰 *Pagamento:* PayPal, bonifico, contanti (da specificare)
+📋 *Condizioni:* Non specificate
 
-👤 Venditore: ${user.username ? '@' + user.username : user.firstName}
+📝 Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione.
 `;
 };
 
@@ -136,9 +145,29 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
 `;
 };
 
+/**
+ * Formatta il messaggio di benvenuto con i comandi disponibili
+ * @returns {String} Testo formattato del messaggio di benvenuto
+ */
+const formatWelcomeMessage = () => {
+  return `
+👋 *Benvenuto nel bot di compravendita kWh!*
+
+Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
+
+🔌 *Comandi disponibili:*
+/vendi\\_kwh - Crea un annuncio per vendere kWh
+/le\\_mie\\_ricariche - Visualizza le tue ricariche attive
+/profilo - Visualizza il tuo profilo
+
+Se hai domande, contatta @admin_username.
+`;
+};
+
 module.exports = {
   formatSellAnnouncement,
   formatChargeRequest,
   formatOfferListItem,
-  formatUserProfile
+  formatUserProfile,
+  formatWelcomeMessage
 };
