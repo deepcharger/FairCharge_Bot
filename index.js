@@ -5,18 +5,33 @@ const { connectToDatabase } = require('./config/database');
 const commands = require('./handlers/commands');
 const callbacks = require('./handlers/callbacks');
 const middleware = require('./handlers/middleware');
+const logger = require('./utils/logger');
 
 // Connessione al database
 connectToDatabase()
-  .then(() => console.log('Connesso al database MongoDB'))
+  .then(() => logger.info('Connesso al database MongoDB'))
   .catch(err => {
-    console.error('Errore nella connessione al database:', err);
+    logger.error('Errore nella connessione al database:', err);
     process.exit(1);
   });
+
+// Middleware di logging per tutte le richieste
+bot.use((ctx, next) => {
+  const start = Date.now();
+  return next().then(() => {
+    const responseTime = Date.now() - start;
+    logger.request(ctx, responseTime);
+  });
+});
 
 // Registra i middleware
 bot.use(middleware.session());
 bot.use(stage.middleware());
+
+// Middleware per la gestione degli errori
+bot.catch((err, ctx) => {
+  logger.error(`Errore per ${ctx.updateType}:`, err);
+});
 
 // Registra i gestori dei comandi
 bot.start(commands.startCommand);
@@ -64,18 +79,19 @@ bot.on('text', middleware.textMessageHandler);
 // Gestione dei messaggi con foto
 bot.on('photo', middleware.photoMessageHandler);
 
-// Gestione degli errori
-bot.catch((err, ctx) => {
-  console.error(`Errore per ${ctx.updateType}:`, err);
-});
-
 // Avvia il bot
 bot.launch().then(() => {
-  console.log('Bot avviato correttamente!');
+  logger.info('Bot avviato correttamente!');
 }).catch(err => {
-  console.error('Errore nell\'avvio del bot:', err);
+  logger.error('Errore nell\'avvio del bot:', err);
 });
 
 // Enable graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+  logger.info('Interruzione del bot (SIGINT)');
+  bot.stop('SIGINT');
+});
+process.once('SIGTERM', () => {
+  logger.info('Interruzione del bot (SIGTERM)');
+  bot.stop('SIGTERM');
+});
