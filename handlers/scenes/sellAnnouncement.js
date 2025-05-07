@@ -114,7 +114,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
   }
 );
 
-// Gestori delle callback per il wizard - Cambiato connector_ con current_
+// Gestori delle callback per il wizard
 sellAnnouncementScene.action(/current_(.+)/, async (ctx) => {
   const currentType = ctx.match[1];
   ctx.wizard.state.currentType = currentType;
