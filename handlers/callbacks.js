@@ -9,23 +9,27 @@ const Announcement = require('../models/announcement');
 const Offer = require('../models/offer');
 const User = require('../models/user');
 const moment = require('moment');
+const logger = require('../utils/logger');
 
 // Handler per selezionare il tipo di connettore
 const connectorTypeCallback = async (ctx) => {
-  const connectorType = ctx.match[1];
-  ctx.wizard.state.connectorType = connectorType;
-  await ctx.answerCbQuery(`Hai selezionato: ${connectorType}`);
+  // Estrai il tipo di corrente dal match
+  const currentType = ctx.match[1];
+  ctx.wizard.state.currentType = currentType;
   
-  let connectorText;
-  if (connectorType === 'AC') {
-    connectorText = 'AC';
-  } else if (connectorType === 'DC') {
-    connectorText = 'DC';
-  } else if (connectorType === 'both') {
-    connectorText = 'Entrambi (AC e DC)';
+  logger.debug(`Tipo di corrente selezionato: ${currentType} per utente ${ctx.from.id}`);
+  await ctx.answerCbQuery(`Hai selezionato: ${currentType}`);
+  
+  let currentText;
+  if (currentType === 'AC') {
+    currentText = 'AC';
+  } else if (currentType === 'DC') {
+    currentText = 'DC';
+  } else if (currentType === 'both') {
+    currentText = 'Entrambe (AC e DC)';
   }
   
-  await ctx.reply(`Tipo di connettore selezionato: ${connectorText}`);
+  await ctx.reply(`Tipo di corrente selezionato: ${currentText}`);
   await ctx.wizard.steps[2](ctx);
 };
 
@@ -48,7 +52,7 @@ const publishSellCallback = async (ctx) => {
     // Crea un nuovo annuncio
     const announcementData = {
       price: ctx.wizard.state.price,
-      connectorType: ctx.wizard.state.connectorType,
+      connectorType: ctx.wizard.state.currentType, // Usa currentType invece di connectorType
       brand: ctx.wizard.state.brand,
       location: ctx.wizard.state.location,
       nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'nessuno' ? '' : ctx.wizard.state.nonActivatableBrands,
