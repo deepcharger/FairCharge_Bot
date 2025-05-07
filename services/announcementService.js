@@ -3,6 +3,7 @@ const { bot, SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = require('../config/bot');
 const Announcement = require('../models/announcement');
 const User = require('../models/user');
 const { formatSellAnnouncement } = require('../utils/formatters');
+const logger = require('../utils/logger');
 const { Markup } = require('telegraf');
 
 /**
@@ -13,6 +14,8 @@ const { Markup } = require('telegraf');
  */
 const createSellAnnouncement = async (announcementData, userId) => {
   try {
+    logger.info(`Creazione nuovo annuncio di vendita per l'utente ${userId}`, { announcementData });
+    
     // Crea l'annuncio nel database
     const newAnnouncement = new Announcement({
       type: 'sell',
@@ -26,9 +29,10 @@ const createSellAnnouncement = async (announcementData, userId) => {
     });
     
     await newAnnouncement.save();
+    logger.debug(`Annuncio creato con ID: ${newAnnouncement._id}`);
     return newAnnouncement;
   } catch (err) {
-    console.error('Errore nella creazione dell\'annuncio:', err);
+    logger.error('Errore nella creazione dell\'annuncio:', err);
     throw err;
   }
 };
@@ -44,6 +48,8 @@ const publishAnnouncement = async (announcement, user) => {
     const topicId = announcement.type === 'sell' ? 
       SELL_GROUPS_CONFIG.topicId : 
       BUY_GROUPS_CONFIG.topicId;
+    
+    logger.info(`Pubblicazione annuncio ${announcement._id} nel topic ${topicId}`);
     
     // Formatta il messaggio appropriato
     const messageText = announcement.type === 'sell' ? 
@@ -73,9 +79,10 @@ const publishAnnouncement = async (announcement, user) => {
     announcement.messageId = msg.message_id;
     await announcement.save();
     
+    logger.debug(`Annuncio pubblicato con messageId: ${msg.message_id}`);
     return announcement;
   } catch (err) {
-    console.error('Errore nella pubblicazione dell\'annuncio:', err);
+    logger.error(`Errore nella pubblicazione dell'annuncio ${announcement._id}:`, err);
     throw err;
   }
 };
@@ -87,8 +94,11 @@ const publishAnnouncement = async (announcement, user) => {
  */
 const archiveAnnouncement = async (announcementId) => {
   try {
+    logger.info(`Archiviazione annuncio: ${announcementId}`);
+    
     const announcement = await Announcement.findById(announcementId);
     if (!announcement) {
+      logger.warn(`Tentativo di archiviare un annuncio non esistente: ${announcementId}`);
       throw new Error('Annuncio non trovato');
     }
     
@@ -103,16 +113,18 @@ const archiveAnnouncement = async (announcementId) => {
           SELL_GROUPS_CONFIG.topicId : 
           BUY_GROUPS_CONFIG.topicId;
         
+        logger.debug(`Eliminazione messaggio ${announcement.messageId} dal topic ${topicId}`);
         await bot.telegram.deleteMessage(topicId, announcement.messageId);
       } catch (err) {
-        console.error('Errore nell\'eliminazione del messaggio:', err);
+        logger.warn(`Errore nell'eliminazione del messaggio ${announcement.messageId}:`, err);
         // Continua anche se non riesce a eliminare il messaggio
       }
     }
     
+    logger.debug(`Annuncio ${announcementId} archiviato con successo`);
     return announcement;
   } catch (err) {
-    console.error('Errore nell\'archiviazione dell\'annuncio:', err);
+    logger.error(`Errore nell'archiviazione dell'annuncio ${announcementId}:`, err);
     throw err;
   }
 };
@@ -125,13 +137,15 @@ const archiveAnnouncement = async (announcementId) => {
  */
 const getActiveAnnouncement = async (userId, type) => {
   try {
+    logger.debug(`Ricerca annuncio attivo per utente ${userId}, tipo ${type}`);
+    
     return await Announcement.findOne({
       userId: userId,
       type: type,
       status: 'active'
     });
   } catch (err) {
-    console.error('Errore nel recupero dell\'annuncio attivo:', err);
+    logger.error(`Errore nel recupero dell'annuncio attivo per utente ${userId}:`, err);
     throw err;
   }
 };
@@ -145,8 +159,11 @@ const getActiveAnnouncement = async (userId, type) => {
  */
 const updateUserActiveAnnouncement = async (userId, type, announcementId) => {
   try {
+    logger.info(`Aggiornamento annuncio attivo per utente ${userId}, tipo ${type}, annuncio ${announcementId || 'null'}`);
+    
     const user = await User.findOne({ userId: userId });
     if (!user) {
+      logger.warn(`Tentativo di aggiornare annuncio per utente non esistente: ${userId}`);
       throw new Error('Utente non trovato');
     }
     
@@ -157,9 +174,10 @@ const updateUserActiveAnnouncement = async (userId, type, announcementId) => {
     }
     
     await user.save();
+    logger.debug(`Annuncio attivo aggiornato per utente ${userId}`);
     return user;
   } catch (err) {
-    console.error('Errore nell\'aggiornamento dell\'annuncio attivo dell\'utente:', err);
+    logger.error(`Errore nell'aggiornamento dell'annuncio attivo per utente ${userId}:`, err);
     throw err;
   }
 };
