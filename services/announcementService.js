@@ -1,7 +1,7 @@
 // Servizio per la gestione degli annunci
 const Announcement = require('../models/announcement');
 const User = require('../models/user');
-const { formatSellAnnouncement } = require('../utils/formatters');
+const { formatSellAnnouncement, escapeMarkdownV2 } = require('../utils/formatters');
 const logger = require('../utils/logger');
 
 // Evitare dipendenze circolari importando il bot on-demand
@@ -100,9 +100,7 @@ const publishAnnouncement = async (announcement, user) => {
     
     try {
       // 1. Prima invia solo il testo dell'annuncio
-      const messageText = announcement.type === 'sell' ? 
-        escapeMarkdownV2(formatSellAnnouncement(announcement, user)) : 
-        escapeMarkdownV2(formatBuyAnnouncement(announcement, user));
+      const messageText = formatSellAnnouncement(announcement, user);
       
       // Invia il messaggio principale senza bottoni
       const mainMessage = await bot.telegram.sendMessage(
@@ -110,7 +108,7 @@ const publishAnnouncement = async (announcement, user) => {
         messageText,
         {
           message_thread_id: topicId,
-          parse_mode: 'MarkdownV2' // Usa MarkdownV2 per un escape corretto
+          parse_mode: 'Markdown' // Usa Markdown regolare invece di MarkdownV2
         }
       );
       
