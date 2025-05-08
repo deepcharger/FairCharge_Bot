@@ -416,6 +416,8 @@ const setupBot = () => {
   botInstance.command('archivia_annuncio', commands.archiveAnnouncementCommand);
   botInstance.command('cancella_dati_utente', commands.deleteUserDataCommand);
   botInstance.command('aggiungi_feedback', commands.addFeedbackCommand);
+  // Aggiungi il nuovo comando admin
+  botInstance.command('db_admin', commands.dbAdminCommand);
 
   // Registra i gestori delle callback
   botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
