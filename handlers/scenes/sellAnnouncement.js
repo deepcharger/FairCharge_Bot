@@ -19,7 +19,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
   async (ctx) => {
     logger.info(`Avvio wizard vendita kWh per utente ${ctx.from.id}`);
     
-    // Usa emoji e formattazione per chiarezza
+    // Usa emoji e formattazione per chiarezza, correggendo eventuali tag HTML non validi
     await ctx.reply('🔋 <b>Creazione nuovo annuncio di VENDITA</b> 🔋\n\nTi guiderò nella creazione di un annuncio completo.\nPuoi scrivere /annulla in qualsiasi momento per interrompere.', {
       parse_mode: 'HTML'
     });
