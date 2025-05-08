@@ -70,11 +70,6 @@ const formatSellAnnouncement = (announcement, user) => {
     }
   }
 
-  // Escape di tutte le stringhe di input
-  const escapedBrand = escapeMarkdownV2(announcement.brand || '');
-  const escapedLocation = escapeMarkdownV2(announcement.location || '');
-  const escapedNonActivatableBrands = escapeMarkdownV2(announcement.nonActivatableBrands || '');
-  
   // Estrazione info di disponibilità e pagamento dall'additionalInfo
   let availabilityInfo = 'Non specificata';
   let paymentInfo = 'PayPal, bonifico, contanti (da specificare)';
@@ -90,7 +85,7 @@ const formatSellAnnouncement = (announcement, user) => {
         .split('\n')[0]
         .trim();
       if (availabilityLine) {
-        availabilityInfo = escapeMarkdownV2(availabilityLine);
+        availabilityInfo = availabilityLine;
       }
     }
     
@@ -101,7 +96,7 @@ const formatSellAnnouncement = (announcement, user) => {
         .split('\n')[0]
         .trim();
       if (paymentLine) {
-        paymentInfo = escapeMarkdownV2(paymentLine);
+        paymentInfo = paymentLine;
       }
     }
     
@@ -113,28 +108,70 @@ const formatSellAnnouncement = (announcement, user) => {
     );
     
     if (otherLines.length > 0) {
-      otherInfo = escapeMarkdownV2(otherLines.join('\n'));
+      otherInfo = otherLines.join('\n');
     }
   }
 
-  // Escape dei nomi utente
-  const escapedUsername = escapeMarkdownV2(user.username || user.firstName);
-
-  // Costruisci il testo del messaggio con Markdown V2
+  // Costruisci il testo del messaggio con Markdown normale (non V2)
   const message = `${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n\n` : ''}*Vendita kWh sharing*
 
 🆔 *ID annuncio:* ${displayId}
-👤 *Venditore:* @${escapedUsername}
+👤 *Venditore:* @${user.username || user.firstName}
 ${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
 
 💲 *Prezzo:* ${announcement.price}
 ⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-✅ *Reti attivabili:* ${escapedBrand}
-🗺️ *Zone:* ${escapedLocation}
-${announcement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${escapedNonActivatableBrands}\n` : ''}🕒 *Disponibilità:* ${availabilityInfo}
+✅ *Reti attivabili:* ${announcement.brand}
+🗺️ *Zone:* ${announcement.location}
+${announcement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${announcement.nonActivatableBrands}\n` : ''}🕒 *Disponibilità:* ${availabilityInfo}
 💰 *Pagamento:* ${paymentInfo}
 ${otherInfo ? `📋 *Condizioni:* ${otherInfo}\n` : '📋 *Condizioni:* Non specificate\n'}
-📝 _Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione\\._`;
+📝 _Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione._`;
+
+  return message;
+};
+
+/**
+ * Formatta un annuncio di acquisto
+ * @param {Object} announcement - L'annuncio da formattare
+ * @param {Object} user - L'utente proprietario dell'annuncio
+ * @returns {String} Testo formattato dell'annuncio
+ */
+const formatBuyAnnouncement = (announcement, user) => {
+  // Calcola la percentuale di feedback positivi dell'utente
+  let positivePercentage = user.getPositivePercentage();
+  
+  // Testo per il feedback
+  let feedbackText;
+  if (positivePercentage === null) {
+    feedbackText = '(Nuovo acquirente)';
+  } else if (user.totalRatings <= 0) {
+    feedbackText = '(Nuovo acquirente)';
+  } else {
+    feedbackText = `(${positivePercentage}% positivi, ${user.totalRatings} recensioni)`;
+  }
+
+  // Formattazione ID annuncio più leggibile
+  let displayId = announcement._id;
+  if (typeof announcement._id === 'string' && announcement._id.includes('_')) {
+    const idParts = announcement._id.split('_');
+    if (idParts.length >= 2) {
+      displayId = idParts.slice(1).join('_');
+    }
+  }
+
+  // Costruisci il testo del messaggio con Markdown normale (non V2)
+  const message = `*Cerco kWh sharing*
+
+🆔 *ID annuncio:* ${displayId}
+👤 *Acquirente:* @${user.username || user.firstName}
+${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
+
+💲 *Prezzo massimo:* ${announcement.price}
+⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+🗺️ *Zone:* ${announcement.location}
+${announcement.additionalInfo ? `📋 *Note:* ${announcement.additionalInfo}\n` : ''}
+📝 _Dopo la compravendita, l'acquirente inviterà il venditore a esprimere un giudizio sulla transazione._`;
 
   return message;
 };
@@ -146,24 +183,17 @@ ${otherInfo ? `📋 *Condizioni:* ${otherInfo}\n` : '📋 *Condizioni:* Non spec
  * @returns {String} Testo formattato della richiesta
  */
 const formatChargeRequest = (offer, seller) => {
-  const escapedBrand = escapeMarkdownV2(offer.brand || '');
-  const escapedCoordinates = escapeMarkdownV2(offer.coordinates || '');
-  const escapedAdditionalInfo = offer.additionalInfo ? escapeMarkdownV2(offer.additionalInfo) : '';
-
-  // Escape dei nomi utente
-  const escapedUsername = escapeMarkdownV2(seller.username || seller.firstName);
-
   return `
 🔋 *Richiesta di ricarica* 🔋
 
 📅 *Data:* ${offer.date}
 🕙 *Ora:* ${offer.time}
-🏭 *Colonnina:* ${escapedBrand}
-📍 *Posizione:* ${escapedCoordinates}
-${escapedAdditionalInfo ? `ℹ️ *Info aggiuntive:* ${escapedAdditionalInfo}\n` : ''}
+🏭 *Colonnina:* ${offer.brand}
+📍 *Posizione:* ${offer.coordinates}
+${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` : ''}
 
 💰 *Prezzo venditore:* ${seller.announcement ? seller.announcement.price : 'Non specificato'}
-👤 *Venditore:* ${seller.username ? '@' + escapedUsername : escapedUsername}
+👤 *Venditore:* ${seller.username ? '@' + seller.username : seller.firstName}
 `;
 };
 
@@ -177,14 +207,14 @@ ${escapedAdditionalInfo ? `ℹ️ *Info aggiuntive:* ${escapedAdditionalInfo}\n`
  */
 const formatOfferListItem = (offer, index, otherUser, role) => {
   const otherUserName = otherUser ? 
-    (otherUser.username ? '@' + escapeMarkdownV2(otherUser.username) : escapeMarkdownV2(otherUser.firstName)) : 
+    (otherUser.username ? '@' + otherUser.username : otherUser.firstName) : 
     'Utente sconosciuto';
   
   const formattedDate = offer.date instanceof Date ? 
     offer.date.toLocaleDateString('it-IT') : 
     offer.date;
   
-  return `${index + 1}\\. ${formattedDate} ${offer.time} \\- ${otherUserName} \\(${role}\\)`;
+  return `${index + 1}. ${formattedDate} ${offer.time} - ${otherUserName} (${role})`;
 };
 
 /**
@@ -205,32 +235,27 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
   // Formatta il saldo
   const balance = user.balance.toFixed(2);
   
-  // Escape dei nomi
-  const escapedFirstName = escapeMarkdownV2(user.firstName || '');
-  const escapedLastName = user.lastName ? escapeMarkdownV2(user.lastName) : '';
-  const escapedUsername = user.username ? escapeMarkdownV2(user.username) : 'Non impostato';
-  
   // Formatta gli annunci attivi
   let activeAnnouncementsText = '';
   
   if (sellAnnouncement && sellAnnouncement.status === 'active') {
-    activeAnnouncementsText += '\n\n*Annuncio di vendita attivo:*\n';
-    activeAnnouncementsText += `• *Prezzo:* ${sellAnnouncement.price}\n`;
-    activeAnnouncementsText += `• *Corrente:* ${sellAnnouncement.connectorType === 'both' ? 'AC e DC' : sellAnnouncement.connectorType}\n`;
-    activeAnnouncementsText += `• *Località:* ${escapeMarkdownV2(sellAnnouncement.location)}\n`;
+    activeAnnouncementsText += '\n\n<b>Annuncio di vendita attivo:</b>\n';
+    activeAnnouncementsText += `• <b>Prezzo:</b> ${sellAnnouncement.price}\n`;
+    activeAnnouncementsText += `• <b>Corrente:</b> ${sellAnnouncement.connectorType === 'both' ? 'AC e DC' : sellAnnouncement.connectorType}\n`;
+    activeAnnouncementsText += `• <b>Località:</b> ${sellAnnouncement.location}\n`;
   }
   
   if (buyAnnouncement && buyAnnouncement.status === 'active') {
-    activeAnnouncementsText += '\n\n*Annuncio di acquisto attivo:*\n';
-    activeAnnouncementsText += `• *Prezzo massimo:* ${buyAnnouncement.price}\n`;
-    activeAnnouncementsText += `• *Corrente:* ${buyAnnouncement.connectorType === 'both' ? 'AC e DC' : buyAnnouncement.connectorType}\n`;
-    activeAnnouncementsText += `• *Località:* ${escapeMarkdownV2(buyAnnouncement.location)}\n`;
+    activeAnnouncementsText += '\n\n<b>Annuncio di acquisto attivo:</b>\n';
+    activeAnnouncementsText += `• <b>Prezzo massimo:</b> ${buyAnnouncement.price}\n`;
+    activeAnnouncementsText += `• <b>Corrente:</b> ${buyAnnouncement.connectorType === 'both' ? 'AC e DC' : buyAnnouncement.connectorType}\n`;
+    activeAnnouncementsText += `• <b>Località:</b> ${buyAnnouncement.location}\n`;
   }
   
   // Formatta le transazioni recenti
   let transactionsText = '';
   if (transactions && transactions.length > 0) {
-    transactionsText = '\n\n*Ultime transazioni:*\n';
+    transactionsText = '\n\n<b>Ultime transazioni:</b>\n';
     
     for (const transaction of transactions) {
       const date = transaction.createdAt.toLocaleDateString('it-IT');
@@ -242,15 +267,15 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
     }
   }
   
-  // Costruisci il profilo completo
+  // Costruisci il profilo completo usando HTML invece di Markdown
   return `
-👤 *Il tuo profilo*
+👤 <b>Il tuo profilo</b>
 
-*Nome:* ${escapedFirstName}${escapedLastName ? ' ' + escapedLastName : ''}
-*Username:* ${user.username ? '@' + escapedUsername : escapedUsername}
-*Iscritto dal:* ${user.registrationDate.toLocaleDateString('it-IT')}
-*Feedback:* ${feedbackText}
-*Saldo kWh:* ${balance}${activeAnnouncementsText}${transactionsText}
+<b>Nome:</b> ${user.firstName}${user.lastName ? ' ' + user.lastName : ''}
+<b>Username:</b> ${user.username ? '@' + user.username : 'Non impostato'}
+<b>Iscritto dal:</b> ${user.registrationDate.toLocaleDateString('it-IT')}
+<b>Feedback:</b> ${feedbackText}
+<b>Saldo kWh:</b> ${balance}${activeAnnouncementsText}${transactionsText}
 `;
 };
 
@@ -260,23 +285,24 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
  */
 const formatWelcomeMessage = () => {
   return `
-👋 *Benvenuto nel bot di compravendita kWh\\!*
+👋 <b>Benvenuto nel bot di compravendita kWh!</b>
 
-Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici\\.
+Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
 
-🔌 *Comandi disponibili:*
-• /vendi\\_kwh \\- Crea un annuncio per vendere kWh
-• /le\\_mie\\_ricariche \\- Visualizza le tue ricariche attive
-• /profilo \\- Visualizza il tuo profilo
-• /archivia\\_annuncio \\- Archivia il tuo annuncio attivo
-• /help \\- Mostra questo messaggio di aiuto
+🔌 <b>Comandi disponibili:</b>
+• /vendi_kwh - Crea un annuncio per vendere kWh
+• /le_mie_ricariche - Visualizza le tue ricariche attive
+• /profilo - Visualizza il tuo profilo
+• /archivia_annuncio - Archivia il tuo annuncio attivo
+• /help - Mostra questo messaggio di aiuto
 
-Se hai domande, contatta @admin\\_username\\.
+Se hai domande, contatta @admin_username.
 `;
 };
 
 module.exports = {
   formatSellAnnouncement,
+  formatBuyAnnouncement,
   formatChargeRequest,
   formatOfferListItem,
   formatUserProfile,
