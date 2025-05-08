@@ -60,11 +60,29 @@ const publishAnnouncement = async (announcement, user) => {
   try {
     const { bot, SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = getBotModule();
     
-    const topicId = announcement.type === 'sell' ? 
-      SELL_GROUPS_CONFIG.topicId : 
-      BUY_GROUPS_CONFIG.topicId;
+    // Determina quale configurazione usare in base al tipo di annuncio
+    const groupConfig = announcement.type === 'sell' ? 
+      SELL_GROUPS_CONFIG : 
+      BUY_GROUPS_CONFIG;
     
-    logger.info(`Pubblicazione annuncio ${announcement._id} nel topic ${topicId}`);
+    // Estrai le informazioni necessarie (verifica se è già un oggetto o un JSON string)
+    let groupId, topicId;
+    
+    if (typeof groupConfig === 'string') {
+      try {
+        const parsedConfig = JSON.parse(groupConfig);
+        groupId = parsedConfig.groupId;
+        topicId = parsedConfig.topicId;
+      } catch (e) {
+        logger.error('Errore nel parsing della configurazione del gruppo:', e);
+        throw new Error('Configurazione del gruppo non valida');
+      }
+    } else {
+      groupId = groupConfig.groupId;
+      topicId = groupConfig.topicId;
+    }
+    
+    logger.info(`Pubblicazione annuncio ${announcement._id} nel gruppo ${groupId}, topic ${topicId}`);
     
     // Formatta il messaggio appropriato
     const messageText = announcement.type === 'sell' ? 
@@ -80,11 +98,12 @@ const publishAnnouncement = async (announcement, user) => {
         [Markup.button.callback('🔌 Vendi kWh', `sell_kwh_${announcement._id}`)]
       ]);
     
-    // Pubblica il messaggio
+    // Pubblica il messaggio specificando il message_thread_id
     const msg = await bot.telegram.sendMessage(
-      topicId,
+      groupId,  // ID del gruppo
       messageText,
       {
+        message_thread_id: topicId,  // ID del topic/thread
         parse_mode: 'Markdown',
         reply_markup: buttons
       }
@@ -126,12 +145,29 @@ const archiveAnnouncement = async (announcementId) => {
       try {
         const { bot, SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = getBotModule();
         
-        const topicId = announcement.type === 'sell' ? 
-          SELL_GROUPS_CONFIG.topicId : 
-          BUY_GROUPS_CONFIG.topicId;
+        // Determina quale configurazione usare
+        const groupConfig = announcement.type === 'sell' ? 
+          SELL_GROUPS_CONFIG : 
+          BUY_GROUPS_CONFIG;
         
-        logger.debug(`Eliminazione messaggio ${announcement.messageId} dal topic ${topicId}`);
-        await bot.telegram.deleteMessage(topicId, announcement.messageId);
+        // Estrai l'ID del gruppo
+        let groupId;
+        if (typeof groupConfig === 'string') {
+          try {
+            const parsedConfig = JSON.parse(groupConfig);
+            groupId = parsedConfig.groupId;
+          } catch (e) {
+            logger.error('Errore nel parsing della configurazione del gruppo:', e);
+            groupId = null;
+          }
+        } else {
+          groupId = groupConfig.groupId;
+        }
+        
+        if (groupId) {
+          logger.debug(`Eliminazione messaggio ${announcement.messageId} dal gruppo ${groupId}`);
+          await bot.telegram.deleteMessage(groupId, announcement.messageId);
+        }
       } catch (err) {
         logger.warn(`Errore nell'eliminazione del messaggio ${announcement.messageId}:`, err);
         // Continua anche se non riesce a eliminare il messaggio
