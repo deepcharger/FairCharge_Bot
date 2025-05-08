@@ -100,7 +100,7 @@ const buyKwhCallback = async (ctx) => {
       // Utente non ha mai avviato il bot, crea un deep link
       const deepLink = `https://t.me/${bot.botInfo.username}?start=buy_${announcementId}`;
       
-      await ctx.answerCbQuery('');
+      await ctx.answerCbQuery('Per procedere, avvia prima il bot in privato');
       await ctx.reply('Per procedere con l\'acquisto, devi prima avviare il bot in chat privata.', {
         reply_markup: {
           inline_keyboard: [
@@ -113,30 +113,44 @@ const buyKwhCallback = async (ctx) => {
     }
     
     // Utente già registrato, memorizza l'ID annuncio e avvia il wizard
+    ctx.scene.state = ctx.scene.state || {}; // Assicurati che ctx.scene.state esista
     ctx.scene.state.announcementId = announcementId;
     await ctx.answerCbQuery('Procedura di acquisto avviata');
     
     // Passa alla chat privata se siamo in un gruppo
     if (ctx.chat.type !== 'private') {
       await ctx.reply(`📱 Per procedere con l'acquisto, ti invio un messaggio in privato.`);
-      await bot.telegram.sendMessage(ctx.from.id, '🔋 *Procediamo con l\'acquisto kWh...*', {
-        parse_mode: 'Markdown'
-      });
-      
-      // Avvia il wizard nella chat privata
-      const stage = ctx.scene.stage;
-      const wizard = stage.scenes.get('BUY_KWH_WIZARD');
-      
-      // Imposta manualmente lo stato
-      ctx.wizard = { state: { announcementId } };
-      await wizard.steps[0](ctx);
+      try {
+        await bot.telegram.sendMessage(ctx.from.id, '🔋 *Procediamo con l\'acquisto kWh...*', {
+          parse_mode: 'Markdown'
+        });
+        
+        // Avvia il wizard nella chat privata
+        const stage = ctx.scene.stage;
+        const wizard = stage.scenes.get('BUY_KWH_WIZARD');
+        
+        // Imposta manualmente lo stato
+        ctx.wizard = { state: { announcementId } };
+        await wizard.steps[0](ctx);
+      } catch (error) {
+        // Questo errore si verifica se l'utente non ha mai interagito con il bot in privato
+        logger.error('Errore nell\'invio del messaggio privato:', error);
+        const deepLink = `https://t.me/${bot.botInfo.username}?start=buy_${announcementId}`;
+        await ctx.reply('Non riesco a inviarti un messaggio privato. Avvia prima il bot in chat privata.', {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🚀 Avvia il bot', url: deepLink }]
+            ]
+          }
+        });
+      }
       
       return;
     }
     
     return ctx.scene.enter('BUY_KWH_WIZARD');
   } catch (err) {
-    console.error('Errore nell\'avvio della procedura di acquisto:', err);
+    logger.error('Errore nell\'avvio della procedura di acquisto:', err);
     await ctx.answerCbQuery('Si è verificato un errore');
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
