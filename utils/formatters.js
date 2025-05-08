@@ -3,9 +3,9 @@ const User = require('../models/user');
 const logger = require('./logger');
 
 /**
- * Escapa caratteri speciali in una stringa per Markdown
- * @param {String} text - Testo da escapare
- * @returns {String} Testo escapato
+ * Sanitizza caratteri speciali in una stringa per Markdown
+ * @param {String} text - Testo da sanitizzare
+ * @returns {String} Testo sanitizzato
  */
 const sanitizeMarkdown = (text) => {
   if (!text) return '';
@@ -145,27 +145,97 @@ const formatSellAnnouncementSafe = (announcement, user) => {
     firstName: user.firstName ? sanitizeMarkdown(user.firstName) : ''
   };
   
-  // Costruisci un testo sicuro
-  const safeBadge = (user.getPositivePercentage() >= 90 && user.totalRatings >= 5) ? 
-    '🏆 🛡️ VENDITORE AFFIDABILE\n\n' : '';
+  // Calcola la percentuale di feedback positivi dell'utente
+  let positivePercentage = user.getPositivePercentage();
+  
+  // Testo per il feedback
+  let feedbackText;
+  if (positivePercentage === null) {
+    feedbackText = '(Nuovo venditore)';
+  } else if (user.totalRatings <= 0) {
+    feedbackText = '(Nuovo venditore)';
+  } else {
+    feedbackText = `(${positivePercentage}% positivi, ${user.totalRatings} recensioni)`;
+  }
+  
+  // Badge venditore affidabile
+  let trustedBadgeEmoji = '';
+  let trustedBadgeText = '';
+  if (positivePercentage !== null && positivePercentage >= 90 && user.totalRatings >= 5) {
+    trustedBadgeEmoji = '🏆 🛡️';
+    trustedBadgeText = 'VENDITORE AFFIDABILE';
+  }
 
-  // Utilizza un formato estremamente semplice
-  return `${safeBadge}*Vendita kWh sharing*
+  // Formattazione ID annuncio più leggibile
+  let displayId = announcement._id;
+  // Se l'ID è nel formato personalizzato userId_yyyy-MM-dd_HH-mm
+  if (typeof announcement._id === 'string' && announcement._id.includes('_')) {
+    // Estrai solo la parte della data/ora
+    const idParts = announcement._id.split('_');
+    if (idParts.length >= 2) {
+      displayId = idParts.slice(1).join('_');
+    }
+  }
 
-🆔 ID annuncio: ${announcement._id}
-👤 Venditore: @${sanitizedUser.username || sanitizedUser.firstName}
-⭐ Feedback: ${user.getPositivePercentage() !== null ? `${user.getPositivePercentage()}% positivi (${user.positiveRatings}/${user.totalRatings})` : '(Nuovo venditore)'}
+  // Estrazione info di disponibilità e pagamento dall'additionalInfo
+  let availabilityInfo = 'Non specificata';
+  let paymentInfo = 'PayPal, bonifico, contanti (da specificare)';
+  let otherInfo = '';
+  
+  if (sanitizedAnnouncement.additionalInfo) {
+    const additionalInfo = sanitizedAnnouncement.additionalInfo;
+    
+    // Estrai la disponibilità
+    if (additionalInfo.includes('Disponibilità:')) {
+      const availabilityLine = additionalInfo
+        .split('Disponibilità:')[1]
+        .split('\n')[0]
+        .trim();
+      if (availabilityLine) {
+        availabilityInfo = availabilityLine;
+      }
+    }
+    
+    // Estrai i metodi di pagamento
+    if (additionalInfo.includes('Metodi di pagamento:')) {
+      const paymentLine = additionalInfo
+        .split('Metodi di pagamento:')[1]
+        .split('\n')[0]
+        .trim();
+      if (paymentLine) {
+        paymentInfo = paymentLine;
+      }
+    }
+    
+    // Altre info (escludi disponibilità e pagamento)
+    const lines = additionalInfo.split('\n');
+    const otherLines = lines.filter(line => 
+      !line.includes('Disponibilità:') && 
+      !line.includes('Metodi di pagamento:')
+    );
+    
+    if (otherLines.length > 0) {
+      otherInfo = otherLines.join('\n');
+    }
+  }
 
-💲 Prezzo: ${sanitizedAnnouncement.price}
-⚡ Corrente: ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-✅ Reti attivabili: ${sanitizedAnnouncement.brand}
-🗺️ Zone: ${sanitizedAnnouncement.location}
-${sanitizedAnnouncement.nonActivatableBrands ? `⛔ Reti non attivabili: ${sanitizedAnnouncement.nonActivatableBrands}\n` : ''}
-🕒 Disponibilità: ${sanitizedAnnouncement.additionalInfo.includes('Disponibilità:') ? sanitizedAnnouncement.additionalInfo.split('Disponibilità:')[1].split('\n')[0].trim() : 'Non specificata'}
-💰 Pagamento: ${sanitizedAnnouncement.additionalInfo.includes('Metodi di pagamento:') ? sanitizedAnnouncement.additionalInfo.split('Metodi di pagamento:')[1].split('\n')[0].trim() : 'Non specificato'}
-📋 Altre info: ${sanitizedAnnouncement.additionalInfo || 'Non specificate'}
+  // Costruisci il testo del messaggio
+  const message = `${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n\n` : ''}*Vendita kWh sharing*
 
-📝 Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione.`;
+🆔 *ID annuncio:* ${displayId}
+👤 *Venditore:* @${sanitizedUser.username || sanitizedUser.firstName}
+${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
+
+💲 *Prezzo:* ${sanitizedAnnouncement.price}
+⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+✅ *Reti attivabili:* ${sanitizedAnnouncement.brand}
+🗺️ *Zone:* ${sanitizedAnnouncement.location}
+${sanitizedAnnouncement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${sanitizedAnnouncement.nonActivatableBrands}\n` : ''}🕒 *Disponibilità:* ${availabilityInfo}
+💰 *Pagamento:* ${paymentInfo}
+${otherInfo ? `📋 *Condizioni:* ${otherInfo}\n` : '📋 *Condizioni:* Non specificate\n'}
+📝 _Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione._`;
+
+  return message;
 };
 
 /**
@@ -175,6 +245,20 @@ ${sanitizedAnnouncement.nonActivatableBrands ? `⛔ Reti non attivabili: ${sanit
  * @returns {String} Testo formattato dell'annuncio
  */
 const formatBuyAnnouncement = (announcement, user) => {
+  // Sanitizza tutti i campi che potrebbero contenere caratteri Markdown
+  const sanitizedAnnouncement = {
+    ...announcement,
+    price: sanitizeMarkdown(announcement.price),
+    location: sanitizeMarkdown(announcement.location),
+    additionalInfo: announcement.additionalInfo ? sanitizeMarkdown(announcement.additionalInfo) : ''
+  };
+  
+  const sanitizedUser = {
+    ...user,
+    username: user.username ? sanitizeMarkdown(user.username) : '',
+    firstName: user.firstName ? sanitizeMarkdown(user.firstName) : ''
+  };
+  
   // Calcola la percentuale di feedback positivi dell'utente
   let positivePercentage = user.getPositivePercentage();
   
@@ -197,32 +281,18 @@ const formatBuyAnnouncement = (announcement, user) => {
     }
   }
 
-  // Sanitizza i dati per evitare problemi di formattazione
-  const sanitizedAnnouncement = {
-    ...announcement,
-    price: sanitizeMarkdown(announcement.price),
-    location: sanitizeMarkdown(announcement.location),
-    additionalInfo: announcement.additionalInfo ? sanitizeMarkdown(announcement.additionalInfo) : ''
-  };
-
-  const sanitizedUser = {
-    ...user,
-    username: user.username ? sanitizeMarkdown(user.username) : '',
-    firstName: user.firstName ? sanitizeMarkdown(user.firstName) : ''
-  };
-
   // Costruisci il testo del messaggio semplificato
   const message = `*Cerco kWh sharing*
 
-🆔 ID annuncio: ${displayId}
-👤 Acquirente: @${sanitizedUser.username || sanitizedUser.firstName}
-⭐ Feedback: ${positivePercentage !== null ? `${positivePercentage}% positivi (${user.positiveRatings}/${user.totalRatings})` : '(Nuovo acquirente)'}
+🆔 *ID annuncio:* ${displayId}
+👤 *Acquirente:* @${sanitizedUser.username || sanitizedUser.firstName}
+${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
 
-💲 Prezzo massimo: ${sanitizedAnnouncement.price}
-⚡ Corrente: ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-🗺️ Zone: ${sanitizedAnnouncement.location}
-${sanitizedAnnouncement.additionalInfo ? `📋 Note: ${sanitizedAnnouncement.additionalInfo}\n` : ''}
-📝 Dopo la compravendita, l'acquirente inviterà il venditore a esprimere un giudizio sulla transazione.`;
+💲 *Prezzo massimo:* ${sanitizedAnnouncement.price}
+⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+🗺️ *Zone:* ${sanitizedAnnouncement.location}
+${sanitizedAnnouncement.additionalInfo ? `📋 *Note:* ${sanitizedAnnouncement.additionalInfo}\n` : ''}
+📝 _Dopo la compravendita, l'acquirente inviterà il venditore a esprimere un giudizio sulla transazione._`;
 
   return message;
 };
