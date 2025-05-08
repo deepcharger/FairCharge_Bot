@@ -8,6 +8,7 @@ const User = require('../models/user');
 const Offer = require('../models/offer');
 const Announcement = require('../models/announcement');
 const Transaction = require('../models/transaction');
+const Donation = require('../models/donation');
 const moment = require('moment');
 const logger = require('../utils/logger');
 const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
@@ -395,7 +396,8 @@ const updateBotCommandsCommand = async (ctx) => {
       { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
       { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' },
       { command: 'cancella_dati_utente', description: 'Cancella i dati di un utente (solo admin)' },
-      { command: 'aggiungi_feedback', description: 'Aggiungi feedback a un utente (solo admin)' }
+      { command: 'aggiungi_feedback', description: 'Aggiungi feedback a un utente (solo admin)' },
+      { command: 'db_admin', description: 'Gestione database (solo admin)' }
     ];
     
     // Imposta i comandi per gli utenti normali
@@ -465,8 +467,19 @@ const archiveAnnouncementCommand = async (ctx) => {
       return;
     }
     
-    // Archivia l'annuncio (questa funzione include già l'eliminazione del messaggio dal topic)
-    await announcementService.archiveAnnouncement(activeAnnouncement._id);
+    // Archivia l'annuncio 
+    const archivedAnnouncement = await announcementService.archiveAnnouncement(activeAnnouncement._id);
+    
+    if (!archivedAnnouncement) {
+      // Se l'annuncio non è stato trovato o c'è stato un errore nell'archiviazione
+      logger.warn(`Annuncio ID ${activeAnnouncement._id} non trovato o errore nell'archiviazione`);
+      
+      // Aggiorna comunque il riferimento nell'utente per risolvere l'incoerenza
+      await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
+      
+      await ctx.reply(`⚠️ Non è stato possibile trovare l'annuncio nel database, ma il riferimento è stato rimosso dal tuo profilo.`);
+      return;
+    }
     
     // Aggiorna il riferimento nell'utente
     await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
@@ -726,6 +739,493 @@ const deleteUserDataHandler = async (ctx) => {
   return false; // Permette ad altri handler di gestire questo messaggio
 };
 
+/**
+ * Gestisce il comando /db_admin per operazioni sul database
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const dbAdminCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /db_admin ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      messageText: ctx.message.text
+    });
+    
+    // Verifica che l'utente sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      logger.warn(`Tentativo non autorizzato di usare /db_admin da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Estrai i parametri
+    const text = ctx.message.text.split(' ');
+    if (text.length < 2) {
+      await ctx.reply(`
+⚠️ Formato corretto: /db_admin <operazione> [opzioni]
+
+Operazioni disponibili:
+- reset_all: Resetta completamente il database
+- reset_announcements: Cancella solo gli annunci
+- reset_offers: Cancella solo le offerte
+- reset_transactions: Cancella solo le transazioni
+- cleanup_refs: Pulisce i riferimenti non validi
+- check: Verifica la coerenza del database
+- fix_user <userId>: Ripulisce i riferimenti di un utente specifico
+- stats: Mostra statistiche del database
+      `);
+      return;
+    }
+    
+    const operation = text[1].toLowerCase();
+    
+    // Gestione delle diverse operazioni
+    switch (operation) {
+      case 'reset_all':
+        await resetAll(ctx);
+        break;
+      case 'reset_announcements':
+        await resetAnnouncements(ctx);
+        break;
+      case 'reset_offers':
+        await resetOffers(ctx);
+        break;
+      case 'reset_transactions':
+        await resetTransactions(ctx);
+        break;
+      case 'cleanup_refs':
+        await cleanupReferences(ctx);
+        break;
+      case 'check':
+        await checkConsistency(ctx);
+        break;
+      case 'fix_user':
+        if (text.length < 3) {
+          await ctx.reply('⚠️ Specificare l\'ID utente: /db_admin fix_user <userId>');
+          return;
+        }
+        await fixUser(ctx, text[2]);
+        break;
+      case 'stats':
+        await showDatabaseStats(ctx);
+        break;
+      default:
+        await ctx.reply('❌ Operazione non riconosciuta. Usa /db_admin per vedere le operazioni disponibili.');
+    }
+  } catch (err) {
+    logger.error(`Errore nel comando db_admin per utente ${ctx.from.id}:`, err);
+    await ctx.reply('❌ Si è verificato un errore durante l\'esecuzione del comando. Per favore, controlla i log per maggiori dettagli.');
+  }
+};
+
+/**
+ * Resetta completamente il database
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const resetAll = async (ctx) => {
+  // Chiedi conferma
+  await ctx.reply('⚠️ ATTENZIONE: Stai per cancellare TUTTI i dati del database. Questa operazione NON è reversibile!\n\nInvia "CONFERMA RESET TOTALE" per procedere.');
+  
+  // Imposta il flag di conferma nella sessione
+  ctx.session.awaitingDbResetConfirmation = true;
+};
+
+/**
+ * Resetta solo gli annunci
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const resetAnnouncements = async (ctx) => {
+  await ctx.reply('🔄 Cancellazione annunci in corso...');
+  
+  // Conta gli annunci prima della cancellazione
+  const countBefore = await Announcement.countDocuments();
+  
+  // Cancella tutti gli annunci
+  await Announcement.deleteMany({});
+  
+  // Rimuovi i riferimenti agli annunci dagli utenti
+  await User.updateMany({}, {
+    $set: {
+      'activeAnnouncements.sell': null,
+      'activeAnnouncements.buy': null
+    }
+  });
+  
+  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellati ${countBefore} annunci.\nRimossi i riferimenti dagli utenti.`);
+};
+
+/**
+ * Resetta solo le offerte
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const resetOffers = async (ctx) => {
+  await ctx.reply('🔄 Cancellazione offerte in corso...');
+  
+  // Conta le offerte prima della cancellazione
+  const countBefore = await Offer.countDocuments();
+  
+  // Cancella tutte le offerte
+  await Offer.deleteMany({});
+  
+  // Rimuovi i riferimenti alle offerte dagli annunci
+  await Announcement.updateMany({}, {
+    $set: {
+      offers: []
+    }
+  });
+  
+  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellate ${countBefore} offerte.\nRimossi i riferimenti dagli annunci.`);
+};
+
+/**
+ * Resetta solo le transazioni
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const resetTransactions = async (ctx) => {
+  await ctx.reply('🔄 Cancellazione transazioni in corso...');
+  
+  // Conta le transazioni prima della cancellazione
+  const countBefore = await Transaction.countDocuments();
+  
+  // Cancella tutte le transazioni
+  await Transaction.deleteMany({});
+  
+  // Rimuovi i riferimenti alle transazioni dagli utenti
+  await User.updateMany({}, {
+    $set: {
+      transactions: []
+    }
+  });
+  
+  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellate ${countBefore} transazioni.\nRimossi i riferimenti dagli utenti.`);
+};
+
+/**
+ * Pulisce i riferimenti non validi nel database
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cleanupReferences = async (ctx) => {
+  await ctx.reply('🔄 Pulizia riferimenti non validi in corso...');
+  
+  let fixedCount = 0;
+  
+  // Controlla riferimenti agli annunci attivi negli utenti
+  const users = await User.find({
+    $or: [
+      { 'activeAnnouncements.sell': { $ne: null } },
+      { 'activeAnnouncements.buy': { $ne: null } }
+    ]
+  });
+  
+  for (const user of users) {
+    let updated = false;
+    
+    // Controlla annuncio di vendita
+    if (user.activeAnnouncements.sell) {
+      const sellAnnouncement = await Announcement.findById(user.activeAnnouncements.sell);
+      if (!sellAnnouncement || sellAnnouncement.status !== 'active') {
+        user.activeAnnouncements.sell = null;
+        updated = true;
+        fixedCount++;
+      }
+    }
+    
+    // Controlla annuncio di acquisto
+    if (user.activeAnnouncements.buy) {
+      const buyAnnouncement = await Announcement.findById(user.activeAnnouncements.buy);
+      if (!buyAnnouncement || buyAnnouncement.status !== 'active') {
+        user.activeAnnouncements.buy = null;
+        updated = true;
+        fixedCount++;
+      }
+    }
+    
+    if (updated) {
+      await user.save();
+    }
+  }
+  
+  // Controlla annunci che fanno riferimento a utenti inesistenti
+  const announcements = await Announcement.find();
+  let deletedAnnouncements = 0;
+  
+  for (const announcement of announcements) {
+    const owner = await User.findOne({ userId: announcement.userId });
+    if (!owner) {
+      await Announcement.deleteOne({ _id: announcement._id });
+      deletedAnnouncements++;
+      fixedCount++;
+    }
+  }
+  
+  // Controlla offerte che fanno riferimento ad annunci inesistenti
+  const offers = await Offer.find({ announcementId: { $ne: null } });
+  let updatedOffers = 0;
+  
+  for (const offer of offers) {
+    const announcement = await Announcement.findById(offer.announcementId);
+    if (!announcement) {
+      offer.announcementId = null;
+      await offer.save();
+      updatedOffers++;
+      fixedCount++;
+    }
+  }
+  
+  await ctx.reply(`✅ Pulizia completata!\n\nRiferimenti corretti: ${fixedCount}\n- ${deletedAnnouncements} annunci eliminati\n- ${updatedOffers} offerte aggiornate\n- ${fixedCount - deletedAnnouncements - updatedOffers} riferimenti utenti corretti`);
+};
+
+/**
+ * Verifica la coerenza del database
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const checkConsistency = async (ctx) => {
+  await ctx.reply('🔍 Verifica della coerenza del database in corso...');
+  
+  let issues = 0;
+  let report = '';
+  
+  // Verifica utenti con riferimenti a annunci inesistenti
+  const usersWithInvalidAnnouncements = await User.find({
+    $or: [
+      { 'activeAnnouncements.sell': { $ne: null } },
+      { 'activeAnnouncements.buy': { $ne: null } }
+    ]
+  });
+  
+  let invalidAnnouncementRefs = 0;
+  
+  for (const user of usersWithInvalidAnnouncements) {
+    if (user.activeAnnouncements.sell) {
+      const sellAnnouncement = await Announcement.findById(user.activeAnnouncements.sell);
+      if (!sellAnnouncement || sellAnnouncement.status !== 'active') {
+        invalidAnnouncementRefs++;
+        issues++;
+      }
+    }
+    
+    if (user.activeAnnouncements.buy) {
+      const buyAnnouncement = await Announcement.findById(user.activeAnnouncements.buy);
+      if (!buyAnnouncement || buyAnnouncement.status !== 'active') {
+        invalidAnnouncementRefs++;
+        issues++;
+      }
+    }
+  }
+  
+  report += `- Riferimenti a annunci non validi: ${invalidAnnouncementRefs}\n`;
+  
+  // Verifica annunci con riferimenti a utenti inesistenti
+  const announcements = await Announcement.find();
+  let announceWithInvalidUser = 0;
+  
+  for (const announcement of announcements) {
+    const owner = await User.findOne({ userId: announcement.userId });
+    if (!owner) {
+      announceWithInvalidUser++;
+      issues++;
+    }
+  }
+  
+  report += `- Annunci con riferimenti a utenti non validi: ${announceWithInvalidUser}\n`;
+  
+  // Verifica offerte con riferimenti a annunci inesistenti
+  const offersWithInvalidAnnouncements = await Offer.find({ announcementId: { $ne: null } });
+  let invalidOfferRefs = 0;
+  
+  for (const offer of offersWithInvalidAnnouncements) {
+    const announcement = await Announcement.findById(offer.announcementId);
+    if (!announcement) {
+      invalidOfferRefs++;
+      issues++;
+    }
+  }
+  
+  report += `- Offerte con riferimenti a annunci non validi: ${invalidOfferRefs}\n`;
+  
+  // Statistiche del database
+  const userCount = await User.countDocuments();
+  const announcementCount = await Announcement.countDocuments();
+  const offerCount = await Offer.countDocuments();
+  const transactionCount = await Transaction.countDocuments();
+  
+  const stats = `
+📊 <b>Statistiche del database:</b>
+- Utenti: ${userCount}
+- Annunci: ${announcementCount}
+- Offerte: ${offerCount}
+- Transazioni: ${transactionCount}
+`;
+  
+  if (issues === 0) {
+    await ctx.reply(`✅ Nessun problema di coerenza trovato!\n\n${stats}`, { parse_mode: 'HTML' });
+  } else {
+    await ctx.reply(`⚠️ Trovati ${issues} problemi di coerenza:\n\n${report}\nPuoi risolvere questi problemi con /db_admin cleanup_refs\n\n${stats}`, { parse_mode: 'HTML' });
+  }
+};
+
+/**
+ * Corregge i riferimenti di un utente specifico
+ * @param {Object} ctx - Contesto Telegraf
+ * @param {String} userIdStr - ID dell'utente da correggere
+ */
+const fixUser = async (ctx, userIdStr) => {
+  try {
+    const userId = parseInt(userIdStr);
+    
+    if (isNaN(userId)) {
+      await ctx.reply('❌ ID utente non valido. Deve essere un numero.');
+      return;
+    }
+    
+    // Trova l'utente
+    const user = await User.findOne({ userId: userId });
+    
+    if (!user) {
+      await ctx.reply(`❌ Utente con ID ${userId} non trovato.`);
+      return;
+    }
+    
+    await ctx.reply(`🔍 Analisi in corso per l'utente: ${user.username || user.firstName} (ID: ${userId})...`);
+    
+    // Verifica riferimenti agli annunci
+    let updates = [];
+    
+    if (user.activeAnnouncements.sell) {
+      const sellAnnouncement = await Announcement.findById(user.activeAnnouncements.sell);
+      if (!sellAnnouncement || sellAnnouncement.status !== 'active') {
+        user.activeAnnouncements.sell = null;
+        updates.push('- Rimosso riferimento all\'annuncio di vendita');
+      }
+    }
+    
+    if (user.activeAnnouncements.buy) {
+      const buyAnnouncement = await Announcement.findById(user.activeAnnouncements.buy);
+      if (!buyAnnouncement || buyAnnouncement.status !== 'active') {
+        user.activeAnnouncements.buy = null;
+        updates.push('- Rimosso riferimento all\'annuncio di acquisto');
+      }
+    }
+    
+    if (updates.length > 0) {
+      await user.save();
+      await ctx.reply(`✅ Utente corretto con successo!\n\nModifiche effettuate:\n${updates.join('\n')}`);
+    } else {
+      await ctx.reply('✅ Nessun problema trovato per questo utente.');
+    }
+  } catch (err) {
+    logger.error(`Errore nella correzione dell'utente:`, err);
+    await ctx.reply('❌ Si è verificato un errore durante la correzione dell\'utente.');
+  }
+};
+
+/**
+ * Mostra le statistiche del database
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const showDatabaseStats = async (ctx) => {
+  await ctx.reply('📊 Recupero statistiche in corso...');
+  
+  // Conteggi base
+  const userCount = await User.countDocuments();
+  const announcementCount = await Announcement.countDocuments();
+  const offerCount = await Offer.countDocuments();
+  const transactionCount = await Transaction.countDocuments();
+  const donationCount = await Donation.countDocuments();
+  
+  // Conteggi dettagliati
+  const activeAnnouncementCount = await Announcement.countDocuments({ status: 'active' });
+  const archivedAnnouncementCount = await Announcement.countDocuments({ status: 'archived' });
+  const sellAnnouncementCount = await Announcement.countDocuments({ type: 'sell' });
+  const buyAnnouncementCount = await Announcement.countDocuments({ type: 'buy' });
+  
+  // Conteggi offerte per stato
+  const pendingOfferCount = await Offer.countDocuments({ status: 'pending' });
+  const acceptedOfferCount = await Offer.countDocuments({ status: 'accepted' });
+  const completedOfferCount = await Offer.countDocuments({ status: 'completed' });
+  const cancelledOfferCount = await Offer.countDocuments({ status: 'cancelled' });
+  const disputedOfferCount = await Offer.countDocuments({ status: 'disputed' });
+  
+  // Invio delle statistiche
+  await ctx.reply(`
+📊 <b>Statistiche database</b>
+
+<b>Panoramica:</b>
+- Utenti: ${userCount}
+- Annunci: ${announcementCount}
+- Offerte: ${offerCount}
+- Transazioni: ${transactionCount}
+- Donazioni: ${donationCount}
+
+<b>Dettaglio annunci:</b>
+- Attivi: ${activeAnnouncementCount}
+- Archiviati: ${archivedAnnouncementCount}
+- Di vendita: ${sellAnnouncementCount}
+- Di acquisto: ${buyAnnouncementCount}
+
+<b>Dettaglio offerte:</b>
+- In attesa: ${pendingOfferCount}
+- Accettate: ${acceptedOfferCount}
+- Completate: ${completedOfferCount}
+- Annullate: ${cancelledOfferCount}
+- Contestate: ${disputedOfferCount}
+`, { parse_mode: 'HTML' });
+};
+
+/**
+ * Handler per la conferma di reset del database
+ * @param {Object} ctx - Contesto Telegraf
+ * @returns {Boolean} True se il messaggio è stato gestito, false altrimenti
+ */
+const dbResetConfirmationHandler = async (ctx) => {
+  // Verifica che ci sia un'attesa di conferma e che il messaggio corrisponda
+  if (ctx.session && 
+      ctx.session.awaitingDbResetConfirmation && 
+      ctx.message && ctx.message.text === 'CONFERMA RESET TOTALE') {
+    
+    try {
+      // Cancella la sessione
+      delete ctx.session.awaitingDbResetConfirmation;
+      
+      // Verifica che sia l'admin
+      if (!isAdmin(ctx.from.id)) {
+        logger.warn(`Tentativo non autorizzato di confermare reset database da parte di ${ctx.from.id}`);
+        await ctx.reply('❌ Solo l\'amministratore può eseguire questa operazione.');
+        return true;
+      }
+      
+      await ctx.reply('🔄 Reset del database in corso...');
+      
+      // Esegui le operazioni di reset
+      await Announcement.deleteMany({});
+      await Offer.deleteMany({});
+      await Transaction.deleteMany({});
+      await Donation.deleteMany({});
+      
+      // Aggiorna gli utenti
+      await User.updateMany({}, {
+        $set: {
+          positiveRatings: 0,
+          totalRatings: 0,
+          balance: 0,
+          activeAnnouncements: { sell: null, buy: null },
+          transactions: []
+        }
+      });
+      
+      await ctx.reply('✅ Reset del database completato con successo!\n\nTutti i dati sono stati cancellati tranne i profili utente, che sono stati reimpostati (saldo, feedback e annunci attivi azzerati).');
+      
+      return true; // Impedisce che altri handler gestiscano questo messaggio
+    } catch (err) {
+      logger.error(`Errore nel reset del database:`, err);
+      await ctx.reply('❌ Si è verificato un errore durante il reset del database. Per favore, controlla i log per maggiori dettagli.');
+      return true; // Impedisce che altri handler gestiscano questo messaggio
+    }
+  }
+  
+  return false; // Permette ad altri handler di gestire questo messaggio
+};
+
 module.exports = {
   startCommand,
   sellKwhCommand,
@@ -738,5 +1238,7 @@ module.exports = {
   archiveAnnouncementCommand,
   deleteUserDataCommand,
   addFeedbackCommand,
-  deleteUserDataHandler
+  deleteUserDataHandler,
+  dbAdminCommand,
+  dbResetConfirmationHandler
 };
