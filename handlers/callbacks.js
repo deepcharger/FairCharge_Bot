@@ -1,6 +1,6 @@
 // Gestori delle callback per i bottoni inline
 const { Markup } = require('telegraf');
-const { bot } = require('../config/bot');
+const { bot, stage } = require('../config/bot');
 const userService = require('../services/userService');
 const announcementService = require('../services/announcementService');
 const offerService = require('../services/offerService');
@@ -117,27 +117,27 @@ const buyKwhCallback = async (ctx) => {
         
         // Se non è disponibile, prova a ottenerlo dalle variabili d'ambiente
         if (!botUsername) {
-          console.log('botInfo.username non disponibile, utilizzo process.env.BOT_USERNAME');
+          logger.info('botInfo.username non disponibile, utilizzo process.env.BOT_USERNAME');
           botUsername = process.env.BOT_USERNAME;
         }
         
         // Se ancora non disponibile, utilizza il valore corretto
         if (!botUsername) {
-          console.log('BOT_USERNAME non configurato, utilizzo valore hardcoded');
+          logger.info('BOT_USERNAME non configurato, utilizzo valore hardcoded');
           botUsername = 'FairChargePro_Bot'; // Username corretto del bot
         }
       } catch (e) {
-        console.error('Errore nel recupero del nome utente del bot:', e);
+        logger.error('Errore nel recupero del nome utente del bot:', e);
         botUsername = 'FairChargePro_Bot'; // Username corretto del bot come fallback
       }
       
-      console.log(`Generazione deepLink con username: ${botUsername}`);
+      logger.info(`Generazione deepLink con username: ${botUsername}`);
       const deepLink = `https://t.me/${botUsername}?start=buy_${announcementId}`;
       
       try {
         await ctx.answerCbQuery('Per procedere, avvia prima il bot in privato');
       } catch (e) {
-        console.error('Errore answerCbQuery:', e);
+        logger.error('Errore answerCbQuery:', e);
       }
       
       await ctx.reply('Per procedere con l\'acquisto, devi prima avviare il bot in chat privata.', {
@@ -151,42 +151,33 @@ const buyKwhCallback = async (ctx) => {
       return;
     }
     
-    // Utente già registrato, memorizza l'ID annuncio e avvia il wizard
-    if (!ctx.scene) ctx.scene = {};
-    ctx.scene.state = ctx.scene.state || {}; // Assicurati che ctx.scene.state esista
-    ctx.scene.state.announcementId = announcementId;
-    
-    try {
-      await ctx.answerCbQuery('Procedura di acquisto avviata');
-    } catch (e) {
-      console.error('Errore in answerCbQuery:', e);
-    }
+    // Utente già registrato, memorizza l'ID annuncio
     
     // Passa alla chat privata se siamo in un gruppo
     if (ctx.chat && ctx.chat.type !== 'private') {
+      await ctx.answerCbQuery('Procedura di acquisto avviata');
       await ctx.reply(`📱 Per procedere con l'acquisto, ti invio un messaggio in privato.`);
+      
       try {
+        // Invia un messaggio in chat privata
         await bot.telegram.sendMessage(ctx.from.id, '🔋 *Procediamo con l\'acquisto kWh...*', {
           parse_mode: 'Markdown'
         });
         
-        // Avvia il wizard nella chat privata
-        if (ctx.scene && ctx.scene.stage) {
-          const stage = ctx.scene.stage;
-          const wizard = stage.scenes.get('BUY_KWH_WIZARD');
-          
-          if (wizard) {
-            // Imposta manualmente lo stato
-            ctx.wizard = { state: { announcementId } };
-            await wizard.steps[0](ctx);
-          } else {
-            throw new Error('Wizard BUY_KWH_WIZARD non trovato');
+        // Invia un secondo messaggio per avviare il wizard
+        // Invece di usare la scena corrente, creiamo un comando speciale
+        await bot.telegram.sendMessage(ctx.from.id, 
+          `Per procedere con l'acquisto, usa il seguente comando:\n/inizia_acquisto_${announcementId}`, 
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '🔋 Procedi con l\'acquisto', callback_data: `start_buy_${announcementId}` }]
+              ]
+            }
           }
-        } else {
-          throw new Error('ctx.scene o ctx.scene.stage non disponibili');
-        }
+        );
       } catch (error) {
-        // Questo errore si verifica se l'utente non ha mai interagito con il bot in privato
+        // Questo errore si verifica se l'utente non ha ancora avviato il bot in privato
         logger.error('Errore nell\'invio del messaggio privato:', error);
         
         // Usa lo stesso approccio per generare il deeplink corretto
@@ -211,19 +202,44 @@ const buyKwhCallback = async (ctx) => {
       return;
     }
     
-    // Siamo già in chat privata, verifica che ctx.scene.enter esista
-    if (ctx.scene && typeof ctx.scene.enter === 'function') {
-      return ctx.scene.enter('BUY_KWH_WIZARD');
-    } else {
-      throw new Error('ctx.scene.enter non è una funzione');
-    }
+    // Se siamo già in chat privata
+    await ctx.answerCbQuery('Procedura di acquisto avviata');
+    
+    // Memorizza l'ID dell'annuncio in una proprietà che verrà usata dalla scena
+    ctx.session.announcementId = announcementId;
+    
+    // Entra nella scena
+    return ctx.scene.enter('BUY_KWH_WIZARD');
   } catch (err) {
     logger.error('Errore nell\'avvio della procedura di acquisto:', err);
     try {
       await ctx.answerCbQuery('Si è verificato un errore');
     } catch (e) {
-      console.error('Errore in answerCbQuery:', e);
+      logger.error('Errore in answerCbQuery:', e);
     }
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+// Nuova callback per avviare l'acquisto da chat privata
+const startBuyCallback = async (ctx) => {
+  if (!ctx || !ctx.match || !ctx.match[1]) {
+    logger.error('Contesto incompleto nella startBuyCallback');
+    return;
+  }
+  
+  const announcementId = ctx.match[1];
+  
+  try {
+    // Memorizza l'ID dell'annuncio in una proprietà che verrà usata dalla scena
+    ctx.session.announcementId = announcementId;
+    
+    await ctx.answerCbQuery('Avvio procedura di acquisto...');
+    
+    // Entra nella scena
+    return ctx.scene.enter('BUY_KWH_WIZARD');
+  } catch (err) {
+    logger.error('Errore nell\'avvio della procedura di acquisto da chat privata:', err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
@@ -895,6 +911,7 @@ module.exports = {
   publishSellCallback,
   cancelSellCallback,
   buyKwhCallback,
+  startBuyCallback,    // Aggiungi questa nuova funzione
   acceptConditionsCallback,
   cancelBuyCallback,
   sendRequestCallback,
