@@ -22,14 +22,16 @@ const connectorTypeCallback = async (ctx) => {
   
   let currentText;
   if (currentType === 'AC') {
-    currentText = 'AC';
+    currentText = 'AC (corrente alternata)';
   } else if (currentType === 'DC') {
-    currentText = 'DC';
+    currentText = 'DC (corrente continua)';
   } else if (currentType === 'both') {
     currentText = 'Entrambe (AC e DC)';
   }
   
-  await ctx.reply(`Tipo di corrente selezionato: ${currentText}`);
+  await ctx.reply(`✅ Tipo di corrente selezionato: *${currentText}*`, {
+    parse_mode: 'Markdown'
+  });
   await ctx.wizard.steps[2](ctx);
 };
 
@@ -67,7 +69,9 @@ const publishSellCallback = async (ctx) => {
     // Aggiorna l'utente con il riferimento al nuovo annuncio
     await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', newAnnouncement._id);
     
-    await ctx.reply('✅ Il tuo annuncio è stato pubblicato con successo nel topic "Vendo kWh"!');
+    await ctx.reply('✅ *Il tuo annuncio è stato pubblicato con successo nel topic "Vendo kWh"!*', {
+      parse_mode: 'Markdown'
+    });
     
     return ctx.scene.leave();
   } catch (err) {
@@ -98,9 +102,11 @@ const buyKwhCallback = async (ctx) => {
       
       await ctx.answerCbQuery('');
       await ctx.reply('Per procedere con l\'acquisto, devi prima avviare il bot in chat privata.', {
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.url('Avvia il bot', deepLink)]
-        ])
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🚀 Avvia il bot', url: deepLink }]
+          ]
+        }
       });
       
       return;
@@ -112,8 +118,10 @@ const buyKwhCallback = async (ctx) => {
     
     // Passa alla chat privata se siamo in un gruppo
     if (ctx.chat.type !== 'private') {
-      await ctx.reply(`Per procedere con l'acquisto, ti invio un messaggio in privato.`);
-      await bot.telegram.sendMessage(ctx.from.id, 'Procediamo con l\'acquisto kWh...');
+      await ctx.reply(`📱 Per procedere con l'acquisto, ti invio un messaggio in privato.`);
+      await bot.telegram.sendMessage(ctx.from.id, '🔋 *Procediamo con l\'acquisto kWh...*', {
+        parse_mode: 'Markdown'
+      });
       
       // Avvia il wizard nella chat privata
       const stage = ctx.scene.stage;
@@ -137,7 +145,14 @@ const buyKwhCallback = async (ctx) => {
 // Handler per accettare le condizioni di acquisto
 const acceptConditionsCallback = async (ctx) => {
   await ctx.answerCbQuery('Condizioni accettate');
-  await ctx.reply('📅 In quale data vorresti ricaricare? (Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023)');
+  await ctx.reply('📅 *In quale data vorresti ricaricare?*\n\n_Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023_', {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+      ]
+    }
+  });
   ctx.wizard.next();
 };
 
@@ -172,7 +187,9 @@ const sendRequestCallback = async (ctx) => {
     // Notifica il venditore
     await offerService.notifySellerAboutOffer(newOffer, buyer, ctx.wizard.state.announcement);
     
-    await ctx.reply('✅ La tua richiesta è stata inviata al venditore! Riceverai una notifica quando risponderà.');
+    await ctx.reply('✅ *La tua richiesta è stata inviata al venditore!*\n\nRiceverai una notifica quando risponderà.', {
+      parse_mode: 'Markdown'
+    });
     
     return ctx.scene.leave();
   } catch (err) {
@@ -204,10 +221,12 @@ Quando sarai vicino alla colonnina, usa il comando /le_mie_ricariche per avviare
     await offerService.notifyUserAboutOfferUpdate(offer, offer.buyerId, message);
     
     await ctx.reply(`
-✅ Hai accettato la richiesta di ricarica per il ${moment(offer.date).format('DD/MM/YYYY')} alle ${offer.time}.
+✅ *Hai accettato la richiesta di ricarica* per il ${moment(offer.date).format('DD/MM/YYYY')} alle ${offer.time}.
 
 Quando l'acquirente sarà pronto per ricaricare, riceverai una notifica.
-`);
+`, {
+      parse_mode: 'Markdown'
+    });
   } catch (err) {
     console.error('Errore nell\'accettazione dell\'offerta:', err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
@@ -222,8 +241,9 @@ const rejectOfferCallback = async (ctx) => {
     await ctx.answerCbQuery('Richiesta rifiutata');
     
     // Chiedi il motivo del rifiuto
-    await ctx.reply('Per quale motivo stai rifiutando questa richiesta?', {
-      reply_markup: Markup.forceReply()
+    await ctx.reply('📝 *Per quale motivo stai rifiutando questa richiesta?*', {
+      parse_mode: 'Markdown',
+      reply_markup: { force_reply: true }
     });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
@@ -245,7 +265,9 @@ const readyToChargeCallback = async (ctx) => {
     const offer = await offerService.updateOfferStatus(offerId, 'ready_to_charge');
     
     // Chiedi informazioni sul connettore
-    await ctx.reply('Quale numero di connettore utilizzerai? (Scrivi il numero o "altro" se non c\'è o se vuoi contattare direttamente il venditore)');
+    await ctx.reply('🔌 *Quale numero di connettore utilizzerai?*\n\n_Scrivi il numero o "altro" se non c\'è o se vuoi contattare direttamente il venditore_', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.connectorOfferId = offerId;
@@ -260,8 +282,8 @@ const readyToChargeCallback = async (ctx) => {
 🔋 *L'acquirente è pronto per caricare!* 🔋
 
 ${buyerName} è arrivato alla colonnina e sta per iniziare la ricarica.
-Località: ${offer.coordinates}
-Colonnina: ${offer.brand}
+*Località:* ${offer.coordinates}
+*Colonnina:* ${offer.brand}
 
 Ti invierà a breve il numero del connettore.
 `;
@@ -290,16 +312,20 @@ const chargingStartedCallback = async (ctx) => {
 Verifica se la colonnina ha iniziato a caricare correttamente.
 `;
     
-    const keyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback('✅ Ricarica partita', `charging_ok_${offerId}`),
-        Markup.button.callback('❌ Problemi', `charging_issues_${offerId}`)
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Ricarica partita', callback_data: `charging_ok_${offerId}` },
+          { text: '❌ Problemi', callback_data: `charging_issues_${offerId}` }
+        ]
       ]
-    ]);
+    };
     
     await offerService.notifyUserAboutOfferUpdate(offer, offer.buyerId, message, keyboard);
     
-    await ctx.reply('✅ Hai segnalato di aver avviato la ricarica. L\'acquirente confermerà se tutto funziona correttamente.');
+    await ctx.reply('✅ *Hai segnalato di aver avviato la ricarica.*\n\nL\'acquirente confermerà se tutto funziona correttamente.', {
+      parse_mode: 'Markdown'
+    });
   } catch (err) {
     console.error('Errore nella segnalazione di avvio ricarica:', err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
@@ -325,7 +351,9 @@ L'acquirente ha confermato che la ricarica è partita correttamente.
     
     await offerService.notifyUserAboutOfferUpdate(offer, offer.sellerId, message);
     
-    await ctx.reply('✅ Hai confermato che la ricarica è partita correttamente. Quando la ricarica sarà terminata, usa il comando /le_mie_ricariche per completare la procedura.');
+    await ctx.reply('✅ *Hai confermato che la ricarica è partita correttamente.*\n\nQuando la ricarica sarà terminata, usa il comando /le_mie_ricariche per completare la procedura.', {
+      parse_mode: 'Markdown'
+    });
   } catch (err) {
     console.error('Errore nella conferma di ricarica ok:', err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
@@ -340,8 +368,9 @@ const chargingIssuesCallback = async (ctx) => {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
     // Chiedi all'utente di specificare il problema
-    await ctx.reply('Descrivi il problema che stai riscontrando con la ricarica:', {
-      reply_markup: Markup.forceReply()
+    await ctx.reply('⚠️ *Descrivi il problema che stai riscontrando con la ricarica:*', {
+      parse_mode: 'Markdown',
+      reply_markup: { force_reply: true }
     });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
@@ -366,7 +395,9 @@ const chargingCompletedCallback = async (ctx) => {
     }
     
     // Chiedi quanti kWh sono stati caricati
-    await ctx.reply('Quanti kWh hai caricato? (Inserisci un numero, ad esempio 22.5)');
+    await ctx.reply('⚡ *Quanti kWh hai caricato?*\n\n_Inserisci un numero, ad esempio 22.5_', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.completedOfferId = offerId;
@@ -390,7 +421,9 @@ const confirmKwhCallback = async (ctx) => {
     }
     
     // Chiedi al venditore di inserire l'importo da pagare
-    await ctx.reply(`Inserisci l'importo totale da pagare per ${offer.kwhCharged} kWh (formato: 23.45):`);
+    await ctx.reply(`💰 *Inserisci l'importo totale da pagare per ${offer.kwhCharged} kWh*\n\n_Formato: 23.45_`, {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.paymentAmountOfferId = offerId;
@@ -408,7 +441,9 @@ const disputeKwhCallback = async (ctx) => {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
     // Chiedi il motivo della contestazione
-    await ctx.reply('Per quale motivo contesti i kWh dichiarati? Specifica anche il valore corretto se lo conosci.');
+    await ctx.reply('📝 *Per quale motivo contesti i kWh dichiarati?*\n\n_Specifica anche il valore corretto se lo conosci._', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.disputeKwhOfferId = offerId;
@@ -432,7 +467,9 @@ const setPaymentCallback = async (ctx) => {
     }
     
     // Chiedi al venditore di inserire l'importo da pagare
-    await ctx.reply(`Inserisci l'importo totale da pagare per ${offer.kwhCharged} kWh (formato: 23.45):`);
+    await ctx.reply(`💰 *Inserisci l'importo totale da pagare per ${offer.kwhCharged} kWh*\n\n_Formato: 23.45_`, {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.paymentAmountOfferId = offerId;
@@ -456,7 +493,9 @@ const paymentSentCallback = async (ctx) => {
     }
     
     // Chiedi all'acquirente di specificare il metodo di pagamento
-    await ctx.reply('Specifica il metodo di pagamento utilizzato (PayPal, Bonifico, Cripto, Revolut, ecc.) e altri dettagli utili:');
+    await ctx.reply('💳 *Specifica il metodo di pagamento utilizzato e altri dettagli utili:*\n\n_Es: PayPal, Bonifico, Cripto, Revolut, ecc._', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.paymentMethodOfferId = offerId;
@@ -519,13 +558,15 @@ Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback al
 🙏 Ti piacerebbe fare una donazione allo sviluppatore del bot? Questo aiuta a mantenere e migliorare il servizio.
 `, {
       parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([
-        [
-          Markup.button.callback('Dona 2 kWh', `donate_2_${offerId}`),
-          Markup.button.callback('Altra quantità', `donate_custom_${offerId}`)
-        ],
-        [Markup.button.callback('No, grazie', `donate_skip_${offerId}`)]
-      ])
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🎁 Dona 2 kWh', callback_data: `donate_2_${offerId}` },
+            { text: '🎁 Altra quantità', callback_data: `donate_custom_${offerId}` }
+          ],
+          [{ text: '👍 No, grazie', callback_data: `donate_skip_${offerId}` }]
+        ]
+      }
     });
   } catch (err) {
     console.error('Errore nella conferma del pagamento:', err);
@@ -541,7 +582,9 @@ const paymentNotReceivedCallback = async (ctx) => {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
     // Chiedi il motivo della contestazione
-    await ctx.reply('Specifica perché non hai ricevuto il pagamento o cosa c\'è di sbagliato:');
+    await ctx.reply('📝 *Specifica perché non hai ricevuto il pagamento o cosa c\'è di sbagliato:*', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.paymentDisputeOfferId = offerId;
@@ -559,7 +602,9 @@ const feedbackPositiveCallback = async (ctx) => {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
     // Chiedi un commento per il feedback
-    await ctx.reply('Grazie per il tuo feedback positivo! Vuoi aggiungere un breve commento? (o scrivi "nessuno" se preferisci non lasciare commenti)');
+    await ctx.reply('🌟 *Grazie per il tuo feedback positivo!*\n\n_Vuoi aggiungere un breve commento? (o scrivi "nessuno" se preferisci non lasciare commenti)_', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta e il tipo di feedback in un contesto per l'handler successivo
     ctx.session.feedbackOfferId = offerId;
@@ -578,7 +623,9 @@ const feedbackNegativeCallback = async (ctx) => {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
     // Chiedi un commento per il feedback
-    await ctx.reply('Ci dispiace che la tua esperienza non sia stata positiva. Per favore, spiega brevemente cosa è andato storto:');
+    await ctx.reply('😔 *Ci dispiace che la tua esperienza non sia stata positiva.*\n\n_Per favore, spiega brevemente cosa è andato storto:_', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta e il tipo di feedback in un contesto per l'handler successivo
     ctx.session.feedbackOfferId = offerId;
@@ -597,7 +644,9 @@ const cancelChargeCallback = async (ctx) => {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
     // Chiedi il motivo dell'annullamento
-    await ctx.reply('Per quale motivo stai annullando questa ricarica?');
+    await ctx.reply('📝 *Per quale motivo stai annullando questa ricarica?*', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.cancelChargeOfferId = offerId;
@@ -631,7 +680,9 @@ const donateFixedCallback = async (ctx) => {
     const donation = await paymentService.createDonation(seller.userId, adminId, 2);
     
     // Notifica all'utente
-    await ctx.reply('🙏 Grazie per la tua donazione di 2 kWh! Il tuo contributo aiuta a mantenere e migliorare il servizio.');
+    await ctx.reply('🙏 *Grazie per la tua donazione di 2 kWh!*\n\nIl tuo contributo aiuta a mantenere e migliorare il servizio.', {
+      parse_mode: 'Markdown'
+    });
     
     // Notifica all'admin
     await paymentService.notifyAdminAboutDonation(donation, seller);
@@ -648,7 +699,9 @@ const donateCustomCallback = async (ctx) => {
   try {
     await ctx.answerCbQuery('Elaborazione in corso...');
     
-    await ctx.reply('Quanti kWh vorresti donare? (Inserisci un numero, ad esempio 5)');
+    await ctx.reply('🎁 *Quanti kWh vorresti donare?*\n\n_Inserisci un numero, ad esempio 5_', {
+      parse_mode: 'Markdown'
+    });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.donateCustomOfferId = offerId;
@@ -705,7 +758,9 @@ const sendManualRequestCallback = async (ctx) => {
     // Notifica il venditore
     await offerService.notifySellerAboutOffer(newOffer, buyer);
     
-    await ctx.reply('✅ La tua richiesta è stata inviata al venditore! Riceverai una notifica quando risponderà.');
+    await ctx.reply('✅ *La tua richiesta è stata inviata al venditore!*\n\nRiceverai una notifica quando risponderà.', {
+      parse_mode: 'Markdown'
+    });
     
     // Pulisci il contesto
     Object.keys(ctx.session).forEach(key => {
