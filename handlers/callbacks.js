@@ -109,14 +109,29 @@ const buyKwhCallback = async (ctx) => {
     
     if (!user) {
       // Utente non ha mai avviato il bot, crea un deep link
-      // Verifica che bot.botInfo e bot.botInfo.username esistano
+      // Assicurati che il nome utente del bot venga recuperato correttamente
       let botUsername = '';
       try {
-        botUsername = bot.botInfo ? bot.botInfo.username : 'FairChargeProBot';
+        // Prima prova a recuperare dal botInfo
+        botUsername = bot.botInfo?.username;
+        
+        // Se non è disponibile, prova a ottenerlo dalle variabili d'ambiente
+        if (!botUsername) {
+          console.log('botInfo.username non disponibile, utilizzo process.env.BOT_USERNAME');
+          botUsername = process.env.BOT_USERNAME;
+        }
+        
+        // Se ancora non disponibile, utilizza il valore corretto
+        if (!botUsername) {
+          console.log('BOT_USERNAME non configurato, utilizzo valore hardcoded');
+          botUsername = 'FairChargePro_Bot'; // Username corretto del bot
+        }
       } catch (e) {
-        botUsername = 'FairChargeProBot';
+        console.error('Errore nel recupero del nome utente del bot:', e);
+        botUsername = 'FairChargePro_Bot'; // Username corretto del bot come fallback
       }
       
+      console.log(`Generazione deepLink con username: ${botUsername}`);
       const deepLink = `https://t.me/${botUsername}?start=buy_${announcementId}`;
       
       try {
@@ -173,7 +188,17 @@ const buyKwhCallback = async (ctx) => {
       } catch (error) {
         // Questo errore si verifica se l'utente non ha mai interagito con il bot in privato
         logger.error('Errore nell\'invio del messaggio privato:', error);
-        const deepLink = `https://t.me/${bot.botInfo?.username || 'FairChargeProBot'}?start=buy_${announcementId}`;
+        
+        // Usa lo stesso approccio per generare il deeplink corretto
+        let botUsername = '';
+        try {
+          botUsername = bot.botInfo?.username || process.env.BOT_USERNAME || 'FairChargePro_Bot';
+        } catch (e) {
+          botUsername = 'FairChargePro_Bot';
+        }
+        
+        const deepLink = `https://t.me/${botUsername}?start=buy_${announcementId}`;
+        
         await ctx.reply('Non riesco a inviarti un messaggio privato. Avvia prima il bot in chat privata.', {
           reply_markup: {
             inline_keyboard: [
