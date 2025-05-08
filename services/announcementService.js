@@ -99,29 +99,49 @@ const publishAnnouncement = async (announcement, user) => {
       formatSellAnnouncement(announcement, user) : 
       formatBuyAnnouncement(announcement, user);
     
-    // Prepara i bottoni inline usando il formato diretto
-    const inlineKeyboard = announcement.type === 'sell' ? 
-      {
-        inline_keyboard: [
-          [{ text: '🔋 Acquista kWh', callback_data: `buy_kwh_${announcement._id}` }]
-        ]
-      } : 
-      {
-        inline_keyboard: [
-          [{ text: '🔌 Vendi kWh', callback_data: `sell_kwh_${announcement._id}` }]
-        ]
-      };
+    // Pubblica il messaggio nell'approccio più semplice e robusto
+    let msg;
     
-    // Pubblica il messaggio specificando il message_thread_id
-    const msg = await bot.telegram.sendMessage(
-      groupId,  // ID del gruppo
-      messageText, // Testo del messaggio
-      {
-        message_thread_id: topicId,  // ID del topic/thread
-        parse_mode: 'Markdown', // Usa Markdown per formattazione
-        reply_markup: inlineKeyboard // Utilizzo diretto dell'oggetto keyboard
-      }
-    );
+    try {
+      // Primo tentativo: invia il messaggio senza bottoni
+      msg = await bot.telegram.sendMessage(
+        groupId,  // ID del gruppo
+        messageText, // Testo del messaggio
+        {
+          message_thread_id: topicId,  // ID del topic/thread
+          parse_mode: 'Markdown', // Usa Markdown per formattazione
+        }
+      );
+      
+      // Se il messaggio è stato inviato con successo, aggiungi i bottoni in un secondo momento
+      const callbackData = announcement.type === 'sell' ? 
+        `buy_kwh_${announcement._id}` : 
+        `sell_kwh_${announcement._id}`;
+      
+      const buttonText = announcement.type === 'sell' ? 
+        '🔋 Acquista kWh' : 
+        '🔌 Vendi kWh';
+      
+      // Invia un nuovo messaggio con i bottoni in risposta al primo
+      await bot.telegram.sendMessage(
+        groupId,
+        announcement.type === 'sell' ? 
+          'Usa il bottone qui sotto per acquistare kWh da questo venditore:' : 
+          'Usa il bottone qui sotto per vendere kWh a questo acquirente:',
+        {
+          message_thread_id: topicId,
+          reply_to_message_id: msg.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: buttonText, callback_data: callbackData }]
+            ]
+          }
+        }
+      );
+    } catch (err) {
+      logger.error(`Errore nell'invio del messaggio:`, err);
+      throw err;
+    }
     
     // Aggiorna l'annuncio con l'ID del messaggio
     announcement.messageId = msg.message_id;
