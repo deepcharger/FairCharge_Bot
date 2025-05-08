@@ -5,429 +5,415 @@ const announcementService = require('../../services/announcementService');
 const { formatSellAnnouncement } = require('../../utils/formatters');
 const logger = require('../../utils/logger');
 
+// Funzione helper per creare una "tastiera" con un bottone di annullamento
+const getCancelKeyboard = () => {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Annulla', 'cancel_sell')]
+  ]);
+};
+
 // Crea la scena per il wizard
 const sellAnnouncementScene = new Scenes.WizardScene(
   'SELL_ANNOUNCEMENT_WIZARD',
   // Passo 1: Prezzo
   async (ctx) => {
     logger.info(`Avvio wizard vendita kWh per utente ${ctx.from.id}`);
-    await ctx.reply('🔋 *Vendi kWh* 🔋\n\nQual è il prezzo che vuoi offrire?\n\nEsempi:\n- `0.35€ per kWh`\n- `0.28€ per ricariche > 40kW, 0.35€ per ricariche < 40kW`', {
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-      ])
+    
+    // Usa emoji e formattazione per chiarezza
+    await ctx.reply('🔋 *Creazione nuovo annuncio di VENDITA* 🔋\n\nTi guiderò nella creazione di un annuncio completo.\nPuoi scrivere /annulla in qualsiasi momento per interrompere.', {
+      parse_mode: 'Markdown'
     });
+    
+    // Formatta gli esempi in un carattere più chiaro (usando codice inline per distinguerli)
+    await ctx.reply('Per iniziare, indicami il prezzo dei kWh che vuoi vendere.\n\nEsempi:\n- `0.35€ per kWh`\n- `0.28€ per ricariche > 40kW, 0.35€ per ricariche < 40kW`', {
+      parse_mode: 'Markdown',
+      reply_markup: getCancelKeyboard()
+    });
+    
     return ctx.wizard.next();
   },
   // Passo 2: Tipo corrente
   async (ctx) => {
     try {
-      // Log completo all'inizio del passo 2
       logger.info(`Inizio passo 2 per utente ${ctx.from.id}`);
       
-      // Verifica se il messaggio è una callback
+      // Gestione annullamento via callback
       if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
-        logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 2 (via callback)`);
+        logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 2`);
         await ctx.answerCbQuery('Annuncio cancellato');
         await ctx.reply('❌ Creazione dell\'annuncio annullata.');
         return ctx.scene.leave();
       }
       
-      // Verifica se è un comando
-      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
-        logger.info(`Comando ${ctx.message.text} ricevuto nel passo 2 per utente ${ctx.from.id}`);
-        if (ctx.message.text === '/annulla') {
-          logger.info(`Annullamento via comando per utente ${ctx.from.id}`);
-          await ctx.reply('❌ Creazione dell\'annuncio annullata.');
-          return ctx.scene.leave();
-        }
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        logger.info(`Annullamento via comando per utente ${ctx.from.id}`);
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
       }
       
       ctx.wizard.state.price = ctx.message.text;
       logger.debug(`Prezzo impostato: ${ctx.wizard.state.price}`);
       
-      // Log prima di inviare i bottoni
-      logger.info(`Tentativo di inviare bottoni per la selezione della corrente all'utente ${ctx.from.id}`);
+      // Invio opzioni per il tipo di corrente con formattazione migliorata
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: 'DC (corrente continua)', callback_data: 'current_DC' },
+            { text: 'AC (corrente alternata)', callback_data: 'current_AC' }
+          ],
+          [{ text: 'Entrambe (DC e AC)', callback_data: 'current_both' }],
+          [{ text: '❌ Annulla', callback_data: 'cancel_sell' }]
+        ]
+      };
       
-      try {
-        // Utilizziamo un approccio diverso per i bottoni
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: 'AC', callback_data: 'current_AC' },
-              { text: 'DC', callback_data: 'current_DC' }
-            ],
-            [{ text: 'Entrambe (AC e DC)', callback_data: 'current_both' }],
-            [{ text: '❌ Annulla', callback_data: 'cancel_sell' }]
-          ]
-        };
-        
-        // Invia i bottoni e cattura la risposta
-        const sentMsg = await ctx.telegram.sendMessage(
-          ctx.chat.id,
-          'Che tipo di corrente offri?',
-          { reply_markup: keyboard }
-        );
-        
-        logger.info(`Bottoni inviati con successo, message_id: ${sentMsg.message_id}`);
-      } catch (btnErr) {
-        logger.error(`Errore nell'invio dei bottoni per utente ${ctx.from.id}:`, btnErr);
-        // Fallback: invia solo il messaggio senza bottoni
-        await ctx.reply('Che tipo di corrente offri? (Scrivi AC, DC, o "entrambi")');
-      }
+      await ctx.reply('⚡ *Tipo di corrente disponibile*\n\nSpecifica quali tipi di corrente offri:', {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
       
       logger.info(`Fine passo 2 per utente ${ctx.from.id}`);
       return ctx.wizard.next();
     } catch (err) {
-      logger.error(`Errore generale nel passo 2 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore nel passo 2 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
     }
   },
-  // Passo 3: Brand colonnina
+  // Passo 3: Reti attivabili
   async (ctx) => {
     try {
       logger.info(`Inizio passo 3 per utente ${ctx.from.id}`);
       
-      // Gestione dell'annullamento tramite callback
+      // Gestione callback
       if (ctx.callbackQuery) {
         logger.info(`Callback ricevuta nel passo 3: ${ctx.callbackQuery.data}`);
         
         if (ctx.callbackQuery.data === 'cancel_sell') {
-          logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 3`);
           await ctx.answerCbQuery('Annuncio cancellato');
           await ctx.reply('❌ Creazione dell\'annuncio annullata.');
           return ctx.scene.leave();
         }
         
-        // Gestione delle callback per il tipo di corrente
         if (ctx.callbackQuery.data.startsWith('current_')) {
           const currentType = ctx.callbackQuery.data.replace('current_', '');
           ctx.wizard.state.currentType = currentType;
           
-          logger.info(`Tipo di corrente selezionato via callback: ${currentType} per utente ${ctx.from.id}`);
           await ctx.answerCbQuery(`Hai selezionato: ${currentType}`);
           
           let currentText;
           if (currentType === 'AC') {
-            currentText = 'AC';
+            currentText = 'AC (corrente alternata)';
           } else if (currentType === 'DC') {
-            currentText = 'DC';
+            currentText = 'DC (corrente continua)';
           } else if (currentType === 'both') {
-            currentText = 'Entrambe (AC e DC)';
+            currentText = 'Entrambe (DC e AC)';
           }
           
-          await ctx.reply(`Tipo di corrente selezionato: ${currentText}`);
-          
-          // Procediamo direttamente con il passo del brand colonnina
-          try {
-            const sentMsg = await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte', {
-              reply_markup: Markup.inlineKeyboard([
-                [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-              ])
-            });
-            logger.debug(`Messaggio per brand colonnina inviato, message_id: ${sentMsg.message_id}`);
-            return ctx.wizard.next(); // Passiamo direttamente al passo 4
-          } catch (btnErr) {
-            logger.error(`Errore nell'invio del messaggio per brand colonnina:`, btnErr);
-            await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte');
-            return ctx.wizard.next(); // Passiamo direttamente al passo 4
-          }
+          await ctx.reply(`✅ Tipo di corrente selezionato: ${currentText}`);
         }
-      }
-      
-      // Se è un messaggio di testo, potrebbe essere una risposta diretta o un comando
-      if (ctx.message) {
-        logger.info(`Messaggio ricevuto nel passo 3: ${ctx.message.text}`);
-        
-        // Gestione del comando annulla
-        if (ctx.message.text && ctx.message.text === '/annulla') {
-          logger.info(`Comando /annulla ricevuto nel passo 3 per utente ${ctx.from.id}`);
+      } else if (ctx.message) {
+        // Gestione via messaggio testuale
+        if (ctx.message.text === '/annulla') {
           await ctx.reply('❌ Creazione dell\'annuncio annullata.');
           return ctx.scene.leave();
         }
         
-        // Se l'utente ha digitato il tipo di corrente invece di usare i bottoni
-        if (['AC', 'DC', 'ENTRAMBI', 'ENTRAMBE', 'BOTH'].includes(ctx.message.text.toUpperCase())) {
+        // Se l'utente ha inserito manualmente il tipo di corrente
+        const text = ctx.message.text.toUpperCase();
+        if (text === 'AC' || text === 'DC' || text === 'ENTRAMBE' || text === 'ENTRAMBI') {
           let currentType;
-          if (['AC'].includes(ctx.message.text.toUpperCase())) {
+          if (text === 'AC') {
             currentType = 'AC';
-          } else if (['DC'].includes(ctx.message.text.toUpperCase())) {
+          } else if (text === 'DC') {
             currentType = 'DC';
           } else {
             currentType = 'both';
           }
           
           ctx.wizard.state.currentType = currentType;
-          logger.info(`Tipo di corrente inserito manualmente: ${currentType} per utente ${ctx.from.id}`);
-          
-          await ctx.reply(`Tipo di corrente selezionato: ${currentType === 'both' ? 'Entrambe (AC e DC)' : currentType}`);
-          
-          // Procediamo direttamente con il passo del brand colonnina
-          try {
-            const sentMsg = await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte', {
-              reply_markup: Markup.inlineKeyboard([
-                [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-              ])
-            });
-            logger.debug(`Messaggio per brand colonnina inviato, message_id: ${sentMsg.message_id}`);
-            return ctx.wizard.next(); // Passiamo direttamente al passo 4
-          } catch (btnErr) {
-            logger.error(`Errore nell'invio del messaggio per brand colonnina:`, btnErr);
-            await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte');
-            return ctx.wizard.next(); // Passiamo direttamente al passo 4
-          }
+          await ctx.reply(`✅ Tipo di corrente selezionato: ${currentType === 'both' ? 'Entrambe (DC e AC)' : currentType}`);
         }
       }
-    
-      // Verifica se il tipo di corrente è stato selezionato
+      
+      // Verifica se abbiamo il tipo di corrente prima di procedere
       if (!ctx.wizard.state.currentType) {
-        logger.warn(`Utente ${ctx.from.id} non ha selezionato un tipo di corrente`);
-        await ctx.reply('Per favore, seleziona un tipo di corrente (scrivi AC, DC o "entrambi")', {
-          reply_markup: Markup.inlineKeyboard([
-            [
-              Markup.button.callback('AC', 'current_AC'),
-              Markup.button.callback('DC', 'current_DC')
-            ],
-            [Markup.button.callback('Entrambe (AC e DC)', 'current_both')],
-            [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-          ])
-        });
+        await ctx.reply('Per favore, seleziona un tipo di corrente usando i bottoni sopra o scrivi AC, DC o ENTRAMBE.');
         return;
       }
       
-      logger.info(`Procedendo al passo successivo per utente ${ctx.from.id} con currentType=${ctx.wizard.state.currentType}`);
-      
-      // Questo codice non dovrebbe mai essere eseguito se le callback o input manuali funzionano
-      // Lo teniamo come fallback di sicurezza
-      try {
-        const sentMsg = await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte', {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-          ])
-        });
-        logger.debug(`Messaggio per brand colonnina inviato (fallback), message_id: ${sentMsg.message_id}`);
-      } catch (btnErr) {
-        logger.error(`Errore nell'invio del messaggio per brand colonnina (fallback):`, btnErr);
-        await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte');
-      }
+      // Procedi alla domanda sulle reti attivabili
+      await ctx.reply('🔌 *Reti attivabili*\n\nElenca tutte le reti/operatori che puoi attivare.\n\nEsempi:\n- `Tutte le colonnine`\n- `Enel X, BeCharge, Ionity, Ewiva, Neogy, etc.`\n\nSe vuoi, puoi copiare e incollare direttamente l\'elenco completo delle reti che attivi.', {
+        parse_mode: 'Markdown',
+        reply_markup: getCancelKeyboard()
+      });
       
       logger.info(`Fine passo 3 per utente ${ctx.from.id}`);
       return ctx.wizard.next();
     } catch (err) {
-      logger.error(`Errore generale nel passo 3 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore nel passo 3 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
     }
   },
-  // Passo 4: Posizione
+  // Passo 4: Reti NON attivabili
   async (ctx) => {
     try {
       logger.info(`Inizio passo 4 per utente ${ctx.from.id}`);
       
-      // Gestione dell'annullamento tramite callback
+      // Gestione annullamento via callback
       if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
-        logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 4`);
         await ctx.answerCbQuery('Annuncio cancellato');
         await ctx.reply('❌ Creazione dell\'annuncio annullata.');
         return ctx.scene.leave();
       }
       
-      // Verifica se è un comando
-      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
-        logger.info(`Comando ${ctx.message.text} ricevuto nel passo 4 per utente ${ctx.from.id}`);
-        if (ctx.message.text === '/annulla') {
-          logger.info(`Annullamento via comando per utente ${ctx.from.id}`);
-          await ctx.reply('❌ Creazione dell\'annuncio annullata.');
-          return ctx.scene.leave();
-        }
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
       }
       
       ctx.wizard.state.brand = ctx.message.text;
-      logger.debug(`Brand impostato: ${ctx.wizard.state.brand}`);
+      logger.debug(`Reti attivabili impostate: ${ctx.wizard.state.brand}`);
       
-      try {
-        const sentMsg = await ctx.reply('Dove si trova la colonnina?\n\nEsempi: Italia, Francia, Provincia di Milano, Roma', {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-          ])
-        });
-        logger.debug(`Messaggio per location inviato, message_id: ${sentMsg.message_id}`);
-      } catch (btnErr) {
-        logger.error(`Errore nell'invio del messaggio per location:`, btnErr);
-        await ctx.reply('Dove si trova la colonnina?\n\nEsempi: Italia, Francia, Provincia di Milano, Roma');
-      }
+      // Chiedi le reti NON attivabili (opzionale)
+      await ctx.reply('🚫 *Reti NON attivabili* (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente `Nessuna limitazione`.\n\nEsempi:\n- `Ionity, Tesla Supercharger`\n- `Tutte le colonnine oltre 50kW`', {
+        parse_mode: 'Markdown',
+        reply_markup: getCancelKeyboard()
+      });
       
       logger.info(`Fine passo 4 per utente ${ctx.from.id}`);
       return ctx.wizard.next();
     } catch (err) {
-      logger.error(`Errore generale nel passo 4 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore nel passo 4 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
     }
   },
-  // Passo 5: Brand non attivabili
+  // Passo 5: Disponibilità oraria
   async (ctx) => {
     try {
       logger.info(`Inizio passo 5 per utente ${ctx.from.id}`);
       
-      // Gestione dell'annullamento tramite callback
+      // Gestione annullamento via callback
       if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
-        logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 5`);
         await ctx.answerCbQuery('Annuncio cancellato');
         await ctx.reply('❌ Creazione dell\'annuncio annullata.');
         return ctx.scene.leave();
       }
       
-      // Verifica se è un comando
-      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
-        logger.info(`Comando ${ctx.message.text} ricevuto nel passo 5 per utente ${ctx.from.id}`);
-        if (ctx.message.text === '/annulla') {
-          logger.info(`Annullamento via comando per utente ${ctx.from.id}`);
-          await ctx.reply('❌ Creazione dell\'annuncio annullata.');
-          return ctx.scene.leave();
-        }
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
       }
       
-      ctx.wizard.state.location = ctx.message.text;
-      logger.debug(`Località impostata: ${ctx.wizard.state.location}`);
+      // Salva le reti non attivabili
+      ctx.wizard.state.nonActivatableBrands = ctx.message.text;
+      logger.debug(`Reti NON attivabili impostate: ${ctx.wizard.state.nonActivatableBrands}`);
       
-      try {
-        const sentMsg = await ctx.reply('Ci sono brand di colonnine non attivabili? (scrivi "nessuno" se non ci sono)', {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-          ])
-        });
-        logger.debug(`Messaggio per brand non attivabili inviato, message_id: ${sentMsg.message_id}`);
-      } catch (btnErr) {
-        logger.error(`Errore nell'invio del messaggio per brand non attivabili:`, btnErr);
-        await ctx.reply('Ci sono brand di colonnine non attivabili? (scrivi "nessuno" se non ci sono)');
-      }
+      // Chiedi la disponibilità oraria
+      await ctx.reply('🕒 *Disponibilità oraria*\n\nIndica quando sei disponibile ad attivare la ricarica:\n\nEsempi:\n- `Sempre disponibile (24/7)`\n- `Dalle 8 alle 22 tutti i giorni`\n- `Lun-Ven 9-19, Sab-Dom 10-18`', {
+        parse_mode: 'Markdown',
+        reply_markup: getCancelKeyboard()
+      });
       
       logger.info(`Fine passo 5 per utente ${ctx.from.id}`);
       return ctx.wizard.next();
     } catch (err) {
-      logger.error(`Errore generale nel passo 5 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore nel passo 5 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
     }
   },
-  // Passo 6: Informazioni aggiuntive
+  // Passo 6: Zone di copertura
   async (ctx) => {
     try {
       logger.info(`Inizio passo 6 per utente ${ctx.from.id}`);
       
-      // Gestione dell'annullamento tramite callback
+      // Gestione annullamento via callback
       if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
-        logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 6`);
         await ctx.answerCbQuery('Annuncio cancellato');
         await ctx.reply('❌ Creazione dell\'annuncio annullata.');
         return ctx.scene.leave();
       }
       
-      // Verifica se è un comando
-      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
-        logger.info(`Comando ${ctx.message.text} ricevuto nel passo 6 per utente ${ctx.from.id}`);
-        if (ctx.message.text === '/annulla') {
-          logger.info(`Annullamento via comando per utente ${ctx.from.id}`);
-          await ctx.reply('❌ Creazione dell\'annuncio annullata.');
-          return ctx.scene.leave();
-        }
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
       }
       
-      ctx.wizard.state.nonActivatableBrands = ctx.message.text;
-      logger.debug(`Brand non attivabili: ${ctx.wizard.state.nonActivatableBrands}`);
+      // Salva la disponibilità oraria
+      ctx.wizard.state.availability = ctx.message.text;
+      logger.debug(`Disponibilità oraria impostata: ${ctx.wizard.state.availability}`);
       
-      try {
-        const sentMsg = await ctx.reply('Altre informazioni da aggiungere? (scrivi "nessuna" se non ce ne sono)', {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Annulla', 'cancel_sell')]
-          ])
-        });
-        logger.debug(`Messaggio per info aggiuntive inviato, message_id: ${sentMsg.message_id}`);
-      } catch (btnErr) {
-        logger.error(`Errore nell'invio del messaggio per info aggiuntive:`, btnErr);
-        await ctx.reply('Altre informazioni da aggiungere? (scrivi "nessuna" se non ce ne sono)');
-      }
+      // Chiedi le zone di copertura
+      await ctx.reply('🗺️ *Zone di copertura*\n\nIndica le zone geografiche coperte dal tuo servizio:\n\nEsempi:\n- `Tutta Italia`\n- `Solo Lombardia e Piemonte`\n- `Provincia di Roma`', {
+        parse_mode: 'Markdown',
+        reply_markup: getCancelKeyboard()
+      });
       
       logger.info(`Fine passo 6 per utente ${ctx.from.id}`);
       return ctx.wizard.next();
     } catch (err) {
-      logger.error(`Errore generale nel passo 6 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore nel passo 6 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
     }
   },
-  // Passo 7: Conferma annuncio
+  // Passo 7: Metodi di pagamento
   async (ctx) => {
     try {
       logger.info(`Inizio passo 7 per utente ${ctx.from.id}`);
       
-      // Gestione dell'annullamento tramite callback
+      // Gestione annullamento via callback
       if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
-        logger.info(`Wizard annullato dall'utente ${ctx.from.id} al passo 7`);
         await ctx.answerCbQuery('Annuncio cancellato');
         await ctx.reply('❌ Creazione dell\'annuncio annullata.');
         return ctx.scene.leave();
       }
       
-      // Verifica se è un comando
-      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
-        logger.info(`Comando ${ctx.message.text} ricevuto nel passo 7 per utente ${ctx.from.id}`);
-        if (ctx.message.text === '/annulla') {
-          logger.info(`Annullamento via comando per utente ${ctx.from.id}`);
-          await ctx.reply('❌ Creazione dell\'annuncio annullata.');
-          return ctx.scene.leave();
-        }
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
       }
       
+      // Salva le zone di copertura
+      ctx.wizard.state.location = ctx.message.text;
+      logger.debug(`Zone di copertura impostate: ${ctx.wizard.state.location}`);
+      
+      // Chiedi i metodi di pagamento
+      await ctx.reply('💰 *Metodi di pagamento accettati*\n\nIndica come preferisci ricevere i pagamenti:\n\nEsempi:\n- `PayPal, Revolut`\n- `Solo PayPal`\n- `PayPal, bonifico istantaneo`', {
+        parse_mode: 'Markdown',
+        reply_markup: getCancelKeyboard()
+      });
+      
+      logger.info(`Fine passo 7 per utente ${ctx.from.id}`);
+      return ctx.wizard.next();
+    } catch (err) {
+      logger.error(`Errore nel passo 7 per utente ${ctx.from.id}:`, err);
+      await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
+    }
+  },
+  // Passo 8: Condizioni aggiuntive
+  async (ctx) => {
+    try {
+      logger.info(`Inizio passo 8 per utente ${ctx.from.id}`);
+      
+      // Gestione annullamento via callback
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
+        await ctx.answerCbQuery('Annuncio cancellato');
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
+      }
+      
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
+      }
+      
+      // Salva i metodi di pagamento
+      ctx.wizard.state.paymentMethods = ctx.message.text;
+      logger.debug(`Metodi di pagamento impostati: ${ctx.wizard.state.paymentMethods}`);
+      
+      // Chiedi condizioni aggiuntive
+      await ctx.reply('📋 *Condizioni aggiuntive* (opzionale)\n\nSpecifica eventuali altre condizioni o informazioni che vuoi aggiungere al tuo annuncio:\n\nEsempi:\n- `Pacchetto minimo di 100kWh`\n- `Pagamento anticipato`\n- `Possibilità di ricarica autonoma`\n\nSe non hai altre condizioni, scrivi `Nessuna condizione aggiuntiva`.', {
+        parse_mode: 'Markdown',
+        reply_markup: getCancelKeyboard()
+      });
+      
+      logger.info(`Fine passo 8 per utente ${ctx.from.id}`);
+      return ctx.wizard.next();
+    } catch (err) {
+      logger.error(`Errore nel passo 8 per utente ${ctx.from.id}:`, err);
+      await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
+      return ctx.scene.leave();
+    }
+  },
+  // Passo 9: Conferma annuncio
+  async (ctx) => {
+    try {
+      logger.info(`Inizio passo 9 per utente ${ctx.from.id}`);
+      
+      // Gestione annullamento via callback
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_sell') {
+        await ctx.answerCbQuery('Annuncio cancellato');
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
+      }
+      
+      // Gestione annullamento via comando
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        await ctx.reply('❌ Creazione dell\'annuncio annullata.');
+        return ctx.scene.leave();
+      }
+      
+      // Salva le condizioni aggiuntive
       ctx.wizard.state.additionalInfo = ctx.message.text;
-      logger.debug(`Info aggiuntive: ${ctx.wizard.state.additionalInfo}`);
+      logger.debug(`Condizioni aggiuntive impostate: ${ctx.wizard.state.additionalInfo}`);
       
       try {
         logger.info(`Recupero informazioni utente per ${ctx.from.id}`);
         const user = await userService.registerUser(ctx.from);
         
-        // Verifica che tutti i dati necessari siano presenti
-        if (!ctx.wizard.state.price || !ctx.wizard.state.currentType || !ctx.wizard.state.brand || !ctx.wizard.state.location) {
-          logger.error(`Dati incompleti per l'annuncio dell'utente ${ctx.from.id}`);
-          logger.debug(`Stato wizard: ${JSON.stringify(ctx.wizard.state)}`);
-          await ctx.reply("❌ Dati incompleti per l'annuncio. Riprova dal principio con /vendi_kwh");
-          return ctx.scene.leave();
-        }
-        
         // Creare l'oggetto annuncio per l'anteprima
         const announcement = {
           price: ctx.wizard.state.price,
-          connectorType: ctx.wizard.state.currentType, 
+          connectorType: ctx.wizard.state.currentType,
           brand: ctx.wizard.state.brand,
           location: ctx.wizard.state.location,
-          nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'nessuno' ? '' : ctx.wizard.state.nonActivatableBrands,
-          additionalInfo: ctx.wizard.state.additionalInfo === 'nessuna' ? '' : ctx.wizard.state.additionalInfo
+          nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'Nessuna limitazione' ? '' : ctx.wizard.state.nonActivatableBrands,
+          additionalInfo: ctx.wizard.state.additionalInfo === 'Nessuna condizione aggiuntiva' ? '' : ctx.wizard.state.additionalInfo,
+          availability: ctx.wizard.state.availability,
+          paymentMethods: ctx.wizard.state.paymentMethods
         };
         
-        logger.info(`Generazione anteprima annuncio per utente ${ctx.from.id}`);
-        logger.debug(`Dati annuncio: ${JSON.stringify(announcement)}`);
+        // Crea un'anteprima completa dell'annuncio
+        const anteprima = `
+📢 *Anteprima del tuo annuncio di vendita*
+
+👤 *Venditore:* ${user.username ? '@' + user.username : user.firstName}
+
+💰 *Prezzo:* ${announcement.price}
+⚡ *Tipo di corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+✅ *Reti attivabili:* ${announcement.brand}
+${announcement.nonActivatableBrands ? `🚫 *Reti NON attivabili:* ${announcement.nonActivatableBrands}\n` : ''}
+🕒 *Disponibilità:* ${announcement.availability}
+🗺️ *Zone di copertura:* ${announcement.location}
+💳 *Metodi di pagamento:* ${announcement.paymentMethods}
+${announcement.additionalInfo ? `📋 *Condizioni aggiuntive:* ${announcement.additionalInfo}\n` : ''}
+
+✅ *Conferma per pubblicare l'annuncio nel topic "Vendo kWh".*
+`;
         
-        // Formatta l'anteprima dell'annuncio
-        const announcementPreview = formatSellAnnouncement(announcement, user);
+        // Utilizzando un metodo di costruzione più diretto dell'oggetto keyboard e inviandolo tramite ctx.telegram.sendMessage()
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: '✅ Conferma e pubblica', callback_data: 'publish_sell' },
+              { text: '❌ Annulla', callback_data: 'cancel_sell' }
+            ]
+          ]
+        };
         
-        try {
-          // Mostra l'anteprima con bottoni
-          const sentMsg = await ctx.reply(`*Anteprima del tuo annuncio:*\n\n${announcementPreview}`, {
+        // Mostra l'anteprima con bottoni
+        const sentMsg = await ctx.telegram.sendMessage(
+          ctx.chat.id,
+          anteprima,
+          {
             parse_mode: 'Markdown',
-            reply_markup: Markup.inlineKeyboard([
-              [
-                Markup.button.callback('✅ Conferma e pubblica', 'publish_sell'),
-                Markup.button.callback('❌ Annulla', 'cancel_sell')
-              ]
-            ])
-          });
-          logger.debug(`Anteprima annuncio inviata, message_id: ${sentMsg.message_id}`);
-        } catch (previewErr) {
-          logger.error(`Errore nell'invio dell'anteprima dell'annuncio:`, previewErr);
-          // Fallback: invia solo l'anteprima senza bottoni
-          await ctx.reply(`*Anteprima del tuo annuncio:*\n\n${announcementPreview}\n\nScrivi "conferma" per pubblicare o "annulla" per cancellare.`, {
-            parse_mode: 'Markdown'
-          });
-        }
+            reply_markup: keyboard
+          }
+        );
         
-        logger.info(`Fine passo 7 per utente ${ctx.from.id}`);
+        logger.debug(`Anteprima annuncio inviata, message_id: ${sentMsg.message_id}`);
+        
+        logger.info(`Fine passo 9 per utente ${ctx.from.id}`);
         return ctx.wizard.next();
       } catch (err) {
         logger.error(`Errore nella creazione dell'anteprima per utente ${ctx.from.id}:`, err);
@@ -435,19 +421,19 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         return ctx.scene.leave();
       }
     } catch (err) {
-      logger.error(`Errore generale nel passo 7 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore generale nel passo 9 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
       return ctx.scene.leave();
     }
   },
-  // Passo 8: Gestito dalle callback 'publish_sell' e 'cancel_sell'
+  // Passo 10: Gestito dalle callback 'publish_sell' e 'cancel_sell'
   async (ctx) => {
     try {
-      logger.info(`Inizio passo 8 per utente ${ctx.from.id}`);
+      logger.info(`Inizio passo 10 per utente ${ctx.from.id}`);
       
       // Gestione tramite callback
       if (ctx.callbackQuery) {
-        logger.info(`Callback ricevuta nel passo 8: ${ctx.callbackQuery.data}`);
+        logger.info(`Callback ricevuta nel passo 10: ${ctx.callbackQuery.data}`);
         // Le callback sono gestite separatamente
         return;
       }
@@ -466,41 +452,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
           logger.info(`Conferma via testo per utente ${ctx.from.id}`);
           
           try {
-            logger.info(`Pubblicazione annuncio per utente ${ctx.from.id}`);
-            
-            const user = await userService.registerUser(ctx.from);
-            
-            // Controlla se l'utente ha già un annuncio attivo
-            const existingAnnouncement = await announcementService.getActiveAnnouncement(user.userId, 'sell');
-            
-            // Se esiste già un annuncio attivo, archivialo
-            if (existingAnnouncement) {
-              logger.info(`Archiviazione annuncio esistente ${existingAnnouncement._id} per utente ${ctx.from.id}`);
-              await announcementService.archiveAnnouncement(existingAnnouncement._id);
-              await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
-            }
-            
-            // Crea un nuovo annuncio
-            const announcementData = {
-              price: ctx.wizard.state.price,
-              connectorType: ctx.wizard.state.currentType,
-              brand: ctx.wizard.state.brand,
-              location: ctx.wizard.state.location,
-              nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'nessuno' ? '' : ctx.wizard.state.nonActivatableBrands,
-              additionalInfo: ctx.wizard.state.additionalInfo === 'nessuna' ? '' : ctx.wizard.state.additionalInfo
-            };
-            
-            const newAnnouncement = await announcementService.createSellAnnouncement(announcementData, user.userId);
-            
-            // Pubblica l'annuncio nel topic
-            await announcementService.publishAnnouncement(newAnnouncement, user);
-            
-            // Aggiorna l'utente con il riferimento al nuovo annuncio
-            await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', newAnnouncement._id);
-            
-            logger.info(`Annuncio ${newAnnouncement._id} pubblicato con successo per utente ${ctx.from.id}`);
-            await ctx.reply('✅ Il tuo annuncio è stato pubblicato con successo nel topic "Vendo kWh"!');
-            
+            await publishAnnouncement(ctx);
             return ctx.scene.leave();
           } catch (err) {
             logger.error(`Errore nella pubblicazione dell'annuncio per utente ${ctx.from.id}:`, err);
@@ -510,15 +462,78 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         }
         
         // Messaggio non riconosciuto
-        await ctx.reply('Per favore, conferma o annulla la pubblicazione dell\'annuncio.');
+        await ctx.reply('Per favore, conferma o annulla la pubblicazione dell\'annuncio usando i bottoni visualizzati.');
       }
     } catch (err) {
-      logger.error(`Errore generale nel passo 8 per utente ${ctx.from.id}:`, err);
+      logger.error(`Errore generale nel passo 10 per utente ${ctx.from.id}:`, err);
       await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
       return ctx.scene.leave();
     }
   }
 );
+
+// Funzione ausiliaria per pubblicare l'annuncio
+async function publishAnnouncement(ctx) {
+  logger.info(`Pubblicazione annuncio per utente ${ctx.from.id}`);
+  
+  if (ctx.callbackQuery) {
+    await ctx.answerCbQuery('Pubblicazione in corso...');
+  }
+  
+  const user = await userService.registerUser(ctx.from);
+  
+  // Controlla se l'utente ha già un annuncio attivo
+  const existingAnnouncement = await announcementService.getActiveAnnouncement(user.userId, 'sell');
+  
+  // Se esiste già un annuncio attivo, archivialo
+  if (existingAnnouncement) {
+    logger.info(`Archiviazione annuncio esistente ${existingAnnouncement._id} per utente ${ctx.from.id}`);
+    await announcementService.archiveAnnouncement(existingAnnouncement._id);
+    await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
+  }
+  
+  // Crea un nuovo annuncio con tutti i campi
+  const announcementData = {
+    price: ctx.wizard.state.price,
+    connectorType: ctx.wizard.state.currentType,
+    brand: ctx.wizard.state.brand,
+    location: ctx.wizard.state.location,
+    nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'Nessuna limitazione' ? '' : ctx.wizard.state.nonActivatableBrands,
+    additionalInfo: ctx.wizard.state.additionalInfo === 'Nessuna condizione aggiuntiva' ? '' : ctx.wizard.state.additionalInfo
+  };
+  
+  // Aggiungiamo al campo additionalInfo le informazioni su disponibilità e metodi di pagamento
+  const additionalDetails = [];
+  
+  if (ctx.wizard.state.availability) {
+    additionalDetails.push(`Disponibilità: ${ctx.wizard.state.availability}`);
+  }
+  
+  if (ctx.wizard.state.paymentMethods) {
+    additionalDetails.push(`Metodi di pagamento: ${ctx.wizard.state.paymentMethods}`);
+  }
+  
+  if (ctx.wizard.state.additionalInfo && ctx.wizard.state.additionalInfo !== 'Nessuna condizione aggiuntiva') {
+    additionalDetails.push(ctx.wizard.state.additionalInfo);
+  }
+  
+  // Aggiorna il campo additionalInfo con tutte le informazioni
+  if (additionalDetails.length > 0) {
+    announcementData.additionalInfo = additionalDetails.join('\n');
+  }
+  
+  // Crea e pubblica l'annuncio
+  const newAnnouncement = await announcementService.createSellAnnouncement(announcementData, user.userId);
+  await announcementService.publishAnnouncement(newAnnouncement, user);
+  
+  // Aggiorna l'utente con il riferimento al nuovo annuncio
+  await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', newAnnouncement._id);
+  
+  logger.info(`Annuncio ${newAnnouncement._id} pubblicato con successo per utente ${ctx.from.id}`);
+  await ctx.reply('✅ Il tuo annuncio è stato pubblicato con successo nel topic "Vendo kWh"!');
+  
+  return newAnnouncement;
+}
 
 // Gestori delle callback per il wizard
 sellAnnouncementScene.action(/current_(.+)/, async (ctx) => {
@@ -529,9 +544,19 @@ sellAnnouncementScene.action(/current_(.+)/, async (ctx) => {
     logger.debug(`Tipo di corrente selezionato: ${currentType} per utente ${ctx.from.id}`);
     await ctx.answerCbQuery(`Hai selezionato: ${currentType}`);
     
-    // Non inviamo il messaggio qui, perché verrà inviato nel passo 3
-    // Invece, chiamiamo direttamente la funzione del passo 3
-    await ctx.wizard.steps[2](ctx);
+    let currentText;
+    if (currentType === 'AC') {
+      currentText = 'AC (corrente alternata)';
+    } else if (currentType === 'DC') {
+      currentText = 'DC (corrente continua)';
+    } else if (currentType === 'both') {
+      currentText = 'Entrambe (DC e AC)';
+    }
+    
+    await ctx.reply(`✅ Tipo di corrente selezionato: ${currentText}`);
+    
+    // Procediamo con il passo successivo
+    await ctx.wizard.steps[3](ctx);
   } catch (err) {
     logger.error(`Errore nella callback current_ per utente ${ctx.from.id}:`, err);
     await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi o scrivi /annulla per ricominciare.');
@@ -540,42 +565,7 @@ sellAnnouncementScene.action(/current_(.+)/, async (ctx) => {
 
 sellAnnouncementScene.action('publish_sell', async (ctx) => {
   try {
-    logger.info(`Pubblicazione annuncio per utente ${ctx.from.id}`);
-    await ctx.answerCbQuery('Pubblicazione in corso...');
-    
-    const user = await userService.registerUser(ctx.from);
-    
-    // Controlla se l'utente ha già un annuncio attivo
-    const existingAnnouncement = await announcementService.getActiveAnnouncement(user.userId, 'sell');
-    
-    // Se esiste già un annuncio attivo, archivialo
-    if (existingAnnouncement) {
-      logger.info(`Archiviazione annuncio esistente ${existingAnnouncement._id} per utente ${ctx.from.id}`);
-      await announcementService.archiveAnnouncement(existingAnnouncement._id);
-      await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
-    }
-    
-    // Crea un nuovo annuncio
-    const announcementData = {
-      price: ctx.wizard.state.price,
-      connectorType: ctx.wizard.state.currentType, // Usa currentType invece di connectorType
-      brand: ctx.wizard.state.brand,
-      location: ctx.wizard.state.location,
-      nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'nessuno' ? '' : ctx.wizard.state.nonActivatableBrands,
-      additionalInfo: ctx.wizard.state.additionalInfo === 'nessuna' ? '' : ctx.wizard.state.additionalInfo
-    };
-    
-    const newAnnouncement = await announcementService.createSellAnnouncement(announcementData, user.userId);
-    
-    // Pubblica l'annuncio nel topic
-    await announcementService.publishAnnouncement(newAnnouncement, user);
-    
-    // Aggiorna l'utente con il riferimento al nuovo annuncio
-    await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', newAnnouncement._id);
-    
-    logger.info(`Annuncio ${newAnnouncement._id} pubblicato con successo per utente ${ctx.from.id}`);
-    await ctx.reply('✅ Il tuo annuncio è stato pubblicato con successo nel topic "Vendo kWh"!');
-    
+    await publishAnnouncement(ctx);
     return ctx.scene.leave();
   } catch (err) {
     logger.error(`Errore nella pubblicazione dell'annuncio per utente ${ctx.from.id}:`, err);
@@ -607,10 +597,12 @@ sellAnnouncementScene.command('help', async (ctx) => {
 Stai creando un annuncio per vendere kWh. I passaggi sono:
 1. Prezzo: indica quanto fai pagare per kWh
 2. Tipo corrente: seleziona AC, DC o entrambe
-3. Brand colonnina: indica quali colonnine puoi attivare
-4. Posizione: indica dove sei disponibile
-5. Brand non attivabili: indica se ci sono reti che non puoi attivare
-6. Info aggiuntive: aggiungi altre informazioni utili
+3. Reti attivabili: indica quali colonnine puoi attivare
+4. Reti NON attivabili: indica eventuali limitazioni
+5. Disponibilità oraria: quando sei disponibile ad attivare
+6. Zone di copertura: dove operi
+7. Metodi di pagamento: come preferisci essere pagato
+8. Condizioni aggiuntive: altre informazioni utili
 
 Per annullare in qualsiasi momento, usa il comando /annulla o premi il pulsante "❌ Annulla".
 `, {
