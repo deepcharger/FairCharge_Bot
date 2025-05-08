@@ -81,34 +81,39 @@ const notifySellerAboutOffer = async (offer, buyer, announcement = null) => {
       buyerName: buyer.username || buyer.firstName
     });
     
-    // Prepara il testo della notifica
+    // Prepara il testo della notifica con formattazione migliorata
     let offerText = `
-🔋 <b>Nuova richiesta di ricarica</b> 🔋
+🔋 *Nuova richiesta di ricarica* 🔋
 
-👤 <b>Da:</b> ${buyer.username ? '@' + buyer.username : buyer.firstName}
-📅 <b>Data:</b> ${moment(offer.date).format('DD/MM/YYYY')}
-🕙 <b>Ora:</b> ${offer.time}
-🏭 <b>Colonnina:</b> ${offer.brand}
-📍 <b>Posizione:</b> ${offer.coordinates}
-${offer.additionalInfo ? `ℹ️ <b>Info aggiuntive:</b> ${offer.additionalInfo}\n` : ''}
+👤 *Da:* ${buyer.username ? '@' + buyer.username : buyer.firstName}
+📅 *Data:* ${moment(offer.date).format('DD/MM/YYYY')}
+🕙 *Ora:* ${offer.time}
+🏭 *Colonnina:* ${offer.brand}
+📍 *Posizione:* ${offer.coordinates}
+${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` : ''}
 `;
 
     // Aggiungi dettagli sull'annuncio se disponibile
     if (announcement) {
-      offerText += `\n💰 <b>Prezzo tuo annuncio:</b> ${announcement.price}`;
+      offerText += `\n💰 *Prezzo tuo annuncio:* ${announcement.price}`;
     } else {
-      offerText += '\n💰 <b>Nota:</b> Questa richiesta utilizza il saldo donato da te o da altri venditori.';
+      offerText += '\n💰 *Nota:* Questa richiesta utilizza il saldo donato da te o da altri venditori.';
     }
+    
+    // Prepara i bottoni inline
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Accetta', callback_data: `accept_offer_${offer._id}` },
+          { text: '❌ Rifiuta', callback_data: `reject_offer_${offer._id}` }
+        ]
+      ]
+    };
     
     // Invia la notifica al venditore
     await bot.telegram.sendMessage(offer.sellerId, offerText, {
-      parse_mode: 'HTML',
-      reply_markup: Markup.inlineKeyboard([
-        [
-          Markup.button.callback('✅ Accetta', `accept_offer_${offer._id}`),
-          Markup.button.callback('❌ Rifiuta', `reject_offer_${offer._id}`)
-        ]
-      ])
+      parse_mode: 'Markdown',
+      reply_markup: inlineKeyboard
     });
     
     logger.debug(`Notifica inviata al venditore ${offer.sellerId}`);
@@ -230,7 +235,7 @@ const notifyUserAboutOfferUpdate = async (offer, targetUserId, message, keyboard
     });
     
     const options = {
-      parse_mode: 'HTML'
+      parse_mode: 'Markdown'
     };
     
     if (keyboard) {
