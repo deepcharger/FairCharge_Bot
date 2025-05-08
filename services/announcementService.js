@@ -115,7 +115,7 @@ const publishAnnouncement = async (announcement, user) => {
       messageText,
       {
         message_thread_id: topicId,  // ID del topic/thread
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: buttons
       }
     );
