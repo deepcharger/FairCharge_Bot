@@ -117,6 +117,21 @@ const sellAnnouncementScene = new Scenes.WizardScene(
           }
           
           await ctx.reply(`Tipo di corrente selezionato: ${currentText}`);
+          
+          // Procediamo direttamente con il passo del brand colonnina
+          try {
+            const sentMsg = await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte', {
+              reply_markup: Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Annulla', 'cancel_sell')]
+              ])
+            });
+            logger.debug(`Messaggio per brand colonnina inviato, message_id: ${sentMsg.message_id}`);
+            return ctx.wizard.next(); // Passiamo direttamente al passo 4
+          } catch (btnErr) {
+            logger.error(`Errore nell'invio del messaggio per brand colonnina:`, btnErr);
+            await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte');
+            return ctx.wizard.next(); // Passiamo direttamente al passo 4
+          }
         }
       }
       
@@ -146,6 +161,21 @@ const sellAnnouncementScene = new Scenes.WizardScene(
           logger.info(`Tipo di corrente inserito manualmente: ${currentType} per utente ${ctx.from.id}`);
           
           await ctx.reply(`Tipo di corrente selezionato: ${currentType === 'both' ? 'Entrambe (AC e DC)' : currentType}`);
+          
+          // Procediamo direttamente con il passo del brand colonnina
+          try {
+            const sentMsg = await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte', {
+              reply_markup: Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Annulla', 'cancel_sell')]
+              ])
+            });
+            logger.debug(`Messaggio per brand colonnina inviato, message_id: ${sentMsg.message_id}`);
+            return ctx.wizard.next(); // Passiamo direttamente al passo 4
+          } catch (btnErr) {
+            logger.error(`Errore nell'invio del messaggio per brand colonnina:`, btnErr);
+            await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte');
+            return ctx.wizard.next(); // Passiamo direttamente al passo 4
+          }
         }
       }
     
@@ -167,15 +197,17 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       
       logger.info(`Procedendo al passo successivo per utente ${ctx.from.id} con currentType=${ctx.wizard.state.currentType}`);
       
+      // Questo codice non dovrebbe mai essere eseguito se le callback o input manuali funzionano
+      // Lo teniamo come fallback di sicurezza
       try {
         const sentMsg = await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte', {
           reply_markup: Markup.inlineKeyboard([
             [Markup.button.callback('❌ Annulla', 'cancel_sell')]
           ])
         });
-        logger.debug(`Messaggio per brand colonnina inviato, message_id: ${sentMsg.message_id}`);
+        logger.debug(`Messaggio per brand colonnina inviato (fallback), message_id: ${sentMsg.message_id}`);
       } catch (btnErr) {
-        logger.error(`Errore nell'invio del messaggio per brand colonnina:`, btnErr);
+        logger.error(`Errore nell'invio del messaggio per brand colonnina (fallback):`, btnErr);
         await ctx.reply('Qual è il brand della colonnina di ricarica?\n\nEsempi: Enel X, Free To X, A2A, tutte');
       }
       
@@ -497,16 +529,8 @@ sellAnnouncementScene.action(/current_(.+)/, async (ctx) => {
     logger.debug(`Tipo di corrente selezionato: ${currentType} per utente ${ctx.from.id}`);
     await ctx.answerCbQuery(`Hai selezionato: ${currentType}`);
     
-    let currentText;
-    if (currentType === 'AC') {
-      currentText = 'AC';
-    } else if (currentType === 'DC') {
-      currentText = 'DC';
-    } else if (currentType === 'both') {
-      currentText = 'Entrambe (AC e DC)';
-    }
-    
-    await ctx.reply(`Tipo di corrente selezionato: ${currentText}`);
+    // Non inviamo il messaggio qui, perché verrà inviato nel passo 3
+    // Invece, chiamiamo direttamente la funzione del passo 3
     await ctx.wizard.steps[2](ctx);
   } catch (err) {
     logger.error(`Errore nella callback current_ per utente ${ctx.from.id}:`, err);
