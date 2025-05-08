@@ -2,6 +2,7 @@
 const mongoose = require('mongoose');
 
 const announcementSchema = new mongoose.Schema({
+  _id: { type: String }, // Consentiamo ID personalizzati
   type: { type: String, enum: ['sell', 'buy'], required: true },
   userId: { type: Number, required: true },
   messageId: { type: Number },
@@ -14,7 +15,7 @@ const announcementSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   status: { type: String, enum: ['active', 'archived', 'completed'], default: 'active' },
   offers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Offer' }]
-});
+}, { _id: false }); // Disabilitiamo la generazione automatica dell'ID
 
 // Metodo per archiviare l'annuncio
 announcementSchema.methods.archive = async function() {
