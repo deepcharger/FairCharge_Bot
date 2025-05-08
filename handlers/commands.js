@@ -30,7 +30,7 @@ const startCommand = async (ctx) => {
     const welcomeMessage = formatWelcomeMessage();
     
     await ctx.reply(welcomeMessage, {
-      parse_mode: 'Markdown'
+      parse_mode: 'HTML'
     });
     
     logger.debug(`Messaggio di benvenuto inviato a ${ctx.from.id}`);
@@ -163,7 +163,7 @@ const myChargesCommand = async (ctx) => {
       
       logger.debug(`Invio lista di ${offersList.length} ricariche con stato "${title}" a ${ctx.from.id}`);
       
-      let text = `*${icon} ${title}:*\n`;
+      let text = `<b>${icon} ${title}:</b>\n`;
       
       for (let i = 0; i < offersList.length; i++) {
         const offer = offersList[i];
@@ -182,7 +182,7 @@ const myChargesCommand = async (ctx) => {
         }
       }
       
-      await ctx.reply(text, { parse_mode: 'Markdown' });
+      await ctx.reply(text, { parse_mode: 'HTML' });
     };
     
     // Invia i messaggi per ogni categoria
@@ -247,7 +247,7 @@ const profileCommand = async (ctx) => {
       userProfile.buyAnnouncement
     );
     
-    await ctx.reply(profileText, { parse_mode: 'Markdown' });
+    await ctx.reply(profileText, { parse_mode: 'HTML' });
     logger.debug(`Profilo inviato a ${ctx.from.id}`);
   } catch (err) {
     logger.error(`Errore nel recupero del profilo per utente ${ctx.from.id}:`, err);
@@ -269,7 +269,7 @@ const helpCommand = async (ctx) => {
     // Usa lo stesso formato del messaggio di benvenuto
     const helpMessage = formatWelcomeMessage();
     
-    await ctx.reply(helpMessage, { parse_mode: 'Markdown' });
+    await ctx.reply(helpMessage, { parse_mode: 'HTML' });
     logger.debug(`Messaggio di aiuto inviato a ${ctx.from.id}`);
   } catch (err) {
     logger.error(`Errore nell'invio del messaggio di aiuto per utente ${ctx.from.id}:`, err);
@@ -339,13 +339,13 @@ const startChargeCommand = async (ctx) => {
     
     // Avvia una chat privata con l'admin per prenotare una ricarica
     await ctx.reply(`
-🔋 *Avvio ricarica con ${seller.username ? '@' + seller.username : seller.firstName}* 🔋
+🔋 <b>Avvio ricarica con ${seller.username ? '@' + seller.username : seller.firstName}</b> 🔋
 
 Hai un saldo di ${user.balance.toFixed(2)} kWh.
 
 Per prenotare una ricarica, inserisci i seguenti dettagli:
 `, {
-      parse_mode: 'Markdown'
+      parse_mode: 'HTML'
     });
     
     // Memorizza l'ID del venditore per la procedura guidata
@@ -522,8 +522,8 @@ const deleteUserDataCommand = async (ctx) => {
     }
     
     // Chiedi conferma prima di procedere
-    await ctx.reply(`⚠️ *Conferma cancellazione dati*\n\nStai per cancellare definitivamente i dati dell'utente:\nID: ${user.userId}\nUsername: ${user.username || 'N/A'}\nNome: ${user.firstName || 'N/A'}\n\nPer confermare, rispondi "CONFERMA CANCELLAZIONE ${user.userId}"`, {
-      parse_mode: 'Markdown'
+    await ctx.reply(`⚠️ <b>Conferma cancellazione dati</b>\n\nStai per cancellare definitivamente i dati dell'utente:\nID: ${user.userId}\nUsername: ${user.username || 'N/A'}\nNome: ${user.firstName || 'N/A'}\n\nPer confermare, rispondi "CONFERMA CANCELLAZIONE ${user.userId}"`, {
+      parse_mode: 'HTML'
     });
     
     // Imposta il flag di conferma nella sessione
