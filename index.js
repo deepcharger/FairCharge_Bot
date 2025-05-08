@@ -419,8 +419,25 @@ const setupBot = () => {
   // Aggiungi il nuovo comando admin
   botInstance.command('db_admin', commands.dbAdminCommand);
 
+  // Nuovo handler per il comando speciale inizia_acquisto_ID
+  botInstance.command(/inizia_acquisto_(.+)/, async (ctx) => {
+    try {
+      const announcementId = ctx.match[1];
+      
+      // Memorizza l'ID dell'annuncio nella sessione
+      ctx.session.announcementId = announcementId;
+      
+      // Entra nella scena
+      return ctx.scene.enter('BUY_KWH_WIZARD');
+    } catch (err) {
+      logger.error('Errore nell\'avvio del wizard dal comando:', err);
+      await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+    }
+  });
+
   // Registra i gestori delle callback
   botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
+  botInstance.action(/start_buy_(.+)/, callbacks.startBuyCallback); // Nuovo handler per l'avvio in chat privata
   // Modificato da connector_ a current_ per corrispondere al pattern nella scene
   botInstance.action(/current_(.+)/, callbacks.connectorTypeCallback);
   botInstance.action('publish_sell', callbacks.publishSellCallback);
