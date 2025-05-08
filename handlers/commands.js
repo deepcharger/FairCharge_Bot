@@ -2,12 +2,16 @@
 const { Markup } = require('telegraf');
 const userService = require('../services/userService');
 const offerService = require('../services/offerService');
+const announcementService = require('../services/announcementService');
 const { formatUserProfile, formatOfferListItem, formatWelcomeMessage } = require('../utils/formatters');
 const User = require('../models/user');
+const Offer = require('../models/offer');
+const Announcement = require('../models/announcement');
 const Transaction = require('../models/transaction');
 const moment = require('moment');
 const logger = require('../utils/logger');
-const { isAdmin } = require('../config/admin');
+const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
+const { bot } = require('../config/bot');
 
 /**
  * Gestisce il comando /start
@@ -374,21 +378,33 @@ const updateBotCommandsCommand = async (ctx) => {
       return;
     }
     
-    // Array dei comandi da impostare
-    const commands = [
+    // Array dei comandi da impostare per utenti normali
+    const userCommands = [
       { command: 'start', description: 'Avvia il bot' },
       { command: 'help', description: 'Mostra i comandi disponibili' },
       { command: 'vendi_kwh', description: 'Crea un annuncio per vendere kWh' },
       { command: 'le_mie_ricariche', description: 'Visualizza le tue ricariche attive' },
       { command: 'profilo', description: 'Visualizza il tuo profilo' },
-      { command: 'annulla', description: 'Annulla la procedura in corso' },
-      // Solo per admin, quindi non visibile agli utenti normali
-      { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
-      { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' }
+      { command: 'archivia_annuncio', description: 'Archivia il tuo annuncio attivo' },
+      { command: 'annulla', description: 'Annulla la procedura in corso' }
     ];
     
-    // Imposta i comandi per l'intera applicazione
-    await ctx.telegram.setMyCommands(commands);
+    // Array dei comandi per amministratori
+    const adminCommands = [
+      ...userCommands,
+      { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
+      { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' },
+      { command: 'cancella_dati_utente', description: 'Cancella i dati di un utente (solo admin)' },
+      { command: 'aggiungi_feedback', description: 'Aggiungi feedback a un utente (solo admin)' }
+    ];
+    
+    // Imposta i comandi per gli utenti normali
+    await ctx.telegram.setMyCommands(userCommands);
+    
+    // Imposta i comandi per l'amministratore
+    await ctx.telegram.setMyCommands(adminCommands, {
+      scope: { type: 'chat', chat_id: ADMIN_USER_ID }
+    });
     
     logger.info(`Comandi del bot aggiornati da admin ${ctx.from.id}`);
     await ctx.reply('✅ I comandi del bot sono stati aggiornati con successo!');
@@ -428,6 +444,288 @@ const cancelCommand = async (ctx) => {
   }
 };
 
+/**
+ * Gestisce il comando /archivia_annuncio
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const archiveAnnouncementCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /archivia_annuncio ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    const user = await userService.registerUser(ctx.from);
+    
+    // Verifica se l'utente ha un annuncio attivo
+    const activeAnnouncement = await announcementService.getActiveAnnouncement(user.userId, 'sell');
+    
+    if (!activeAnnouncement) {
+      await ctx.reply('❌ Non hai nessun annuncio attivo da archiviare.');
+      return;
+    }
+    
+    // Archivia l'annuncio (questa funzione include già l'eliminazione del messaggio dal topic)
+    await announcementService.archiveAnnouncement(activeAnnouncement._id);
+    
+    // Aggiorna il riferimento nell'utente
+    await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
+    
+    await ctx.reply(`✅ Il tuo annuncio (ID: ${activeAnnouncement._id}) è stato archiviato con successo.`);
+    
+  } catch (err) {
+    logger.error(`Errore nell'archiviazione dell'annuncio per l'utente ${ctx.from.id}:`, err);
+    await ctx.reply('❌ Si è verificato un errore durante l\'archiviazione dell\'annuncio. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Gestisce il comando /cancella_dati_utente (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const deleteUserDataCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /cancella_dati_utente ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      logger.warn(`Tentativo non autorizzato di usare /cancella_dati_utente da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Estrai il parametro username o userId
+    const text = ctx.message.text.split(' ');
+    if (text.length < 2) {
+      await ctx.reply('⚠️ Formato corretto: /cancella\\_dati\\_utente username o ID');
+      return;
+    }
+    
+    const targetUser = text[1].replace('@', ''); // Rimuovi @ se presente
+    
+    // Cerca l'utente target
+    let user;
+    if (/^\d+$/.test(targetUser)) {
+      // È un ID numerico
+      user = await User.findOne({ userId: parseInt(targetUser) });
+    } else {
+      // È uno username
+      user = await User.findOne({ username: targetUser });
+    }
+    
+    if (!user) {
+      await ctx.reply(`❌ Utente "${targetUser}" non trovato.`);
+      return;
+    }
+    
+    // Chiedi conferma prima di procedere
+    await ctx.reply(`⚠️ *Conferma cancellazione dati*\n\nStai per cancellare definitivamente i dati dell'utente:\nID: ${user.userId}\nUsername: ${user.username || 'N/A'}\nNome: ${user.firstName || 'N/A'}\n\nPer confermare, rispondi "CONFERMA CANCELLAZIONE ${user.userId}"`, {
+      parse_mode: 'Markdown'
+    });
+    
+    // Imposta il flag di conferma nella sessione
+    ctx.session.awaitingDeletionConfirmation = user.userId;
+    
+  } catch (err) {
+    logger.error(`Errore nell'elaborazione del comando cancella_dati_utente:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Gestisce il comando /aggiungi_feedback (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const addFeedbackCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /aggiungi_feedback ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      text: ctx.message.text
+    });
+    
+    // Verifica che sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      logger.warn(`Tentativo non autorizzato di usare /aggiungi_feedback da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Formato: /aggiungi_feedback @username o ID positivi:X negativi:Y
+    const text = ctx.message.text.split(' ');
+    if (text.length < 3) {
+      await ctx.reply(`⚠️ Formato corretto: /aggiungi\\_feedback username o ID positivi:X negativi:Y\n\nEsempio: /aggiungi\\_feedback @ciccio11218 positivi:5 negativi:1`);
+      return;
+    }
+    
+    const targetUser = text[1].replace('@', ''); // Rimuovi @ se presente
+    
+    // Cerca l'utente target
+    let user;
+    if (/^\d+$/.test(targetUser)) {
+      // È un ID numerico
+      user = await User.findOne({ userId: parseInt(targetUser) });
+    } else {
+      // È uno username
+      user = await User.findOne({ username: targetUser });
+    }
+    
+    if (!user) {
+      await ctx.reply(`❌ Utente "${targetUser}" non trovato.`);
+      return;
+    }
+    
+    // Estrai i numeri di feedback positivi e negativi
+    let positivesToAdd = 0;
+    let negativesToAdd = 0;
+    
+    for (let i = 2; i < text.length; i++) {
+      if (text[i].startsWith('positivi:')) {
+        positivesToAdd = parseInt(text[i].replace('positivi:', ''));
+      } else if (text[i].startsWith('negativi:')) {
+        negativesToAdd = parseInt(text[i].replace('negativi:', ''));
+      }
+    }
+    
+    if (isNaN(positivesToAdd) && isNaN(negativesToAdd)) {
+      await ctx.reply('❌ Specificare almeno un valore per positivi e/o negativi.');
+      return;
+    }
+    
+    // Valori di feedback prima dell'aggiornamento
+    const oldPositive = user.positiveRatings || 0;
+    const oldTotal = user.totalRatings || 0;
+    const oldPercentage = user.getPositivePercentage();
+    
+    // Aggiorna il feedback
+    if (!isNaN(positivesToAdd) && positivesToAdd > 0) {
+      user.positiveRatings = (user.positiveRatings || 0) + positivesToAdd;
+      user.totalRatings = (user.totalRatings || 0) + positivesToAdd;
+    }
+    
+    if (!isNaN(negativesToAdd) && negativesToAdd > 0) {
+      // Aggiungiamo solo al totale, non ai positivi
+      user.totalRatings = (user.totalRatings || 0) + negativesToAdd;
+    }
+    
+    await user.save();
+    
+    // Calcola i nuovi valori
+    const newPositive = user.positiveRatings;
+    const newTotal = user.totalRatings;
+    const newPercentage = user.getPositivePercentage();
+    
+    // Invia conferma
+    await ctx.reply(`✅ Feedback aggiornato per utente ${user.username || user.firstName} (ID: ${user.userId}):\n\nFeedback positivi: ${oldPositive} → ${newPositive}\nFeedback totali: ${oldTotal} → ${newTotal}\nPercentuale positivi: ${oldPercentage !== null ? oldPercentage + '%' : 'N/A'} → ${newPercentage !== null ? newPercentage + '%' : 'N/A'}`);
+    
+    // Notifica all'utente dell'aggiornamento dei feedback (opzionale)
+    try {
+      await bot.telegram.sendMessage(user.userId, `ℹ️ Il tuo feedback è stato aggiornato da un amministratore.\nNuovo stato: ${newPositive}/${newTotal} (${newPercentage}% positivi).`);
+    } catch (notifyErr) {
+      logger.warn(`Impossibile notificare l'utente ${user.userId} dell'aggiornamento del feedback:`, notifyErr);
+      // Ignora l'errore, non è critico
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nell'aggiunta del feedback:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Handler per gestire la conferma di cancellazione dei dati utente
+ * @param {Object} ctx - Contesto Telegraf
+ * @returns {Boolean} True se il messaggio è stato gestito, false altrimenti
+ */
+const deleteUserDataHandler = async (ctx) => {
+  // Verifica che ci sia un'attesa di conferma e che il messaggio corrisponda
+  if (ctx.session && 
+      ctx.session.awaitingDeletionConfirmation && 
+      ctx.message && ctx.message.text === `CONFERMA CANCELLAZIONE ${ctx.session.awaitingDeletionConfirmation}`) {
+  
+    const targetUserId = ctx.session.awaitingDeletionConfirmation;
+    
+    try {
+      // Cancella la sessione
+      delete ctx.session.awaitingDeletionConfirmation;
+      
+      // Recupera l'utente
+      const targetUser = await User.findOne({ userId: targetUserId });
+      
+      if (!targetUser) {
+        await ctx.reply('❌ Utente non trovato.');
+        return true; // Impedisce che altri handler gestiscano questo messaggio
+      }
+      
+      // Archivia tutti gli annunci attivi dell'utente
+      const activeAnnouncements = await Announcement.find({ userId: targetUserId, status: 'active' });
+      for (const announcement of activeAnnouncements) {
+        await announcementService.archiveAnnouncement(announcement._id);
+      }
+      
+      // Anonimizza tutte le offerte
+      await Offer.updateMany(
+        { $or: [{ buyerId: targetUserId }, { sellerId: targetUserId }] },
+        { $set: { 
+          additionalInfo: '[Dati eliminati]',
+          coordinates: '[Dati eliminati]',
+          rejectionReason: '[Dati eliminati]',
+          paymentMethod: '[Dati eliminati]',
+          paymentDetails: '[Dati eliminati]'
+        }}
+      );
+      
+      // Elimina i feedback dalle offerte
+      await Offer.updateMany(
+        { buyerId: targetUserId },
+        { $unset: { buyerFeedback: 1 } }
+      );
+      
+      await Offer.updateMany(
+        { sellerId: targetUserId },
+        { $unset: { sellerFeedback: 1 } }
+      );
+      
+      // Aggiorna la proprietà dell'utente
+      await User.updateOne(
+        { userId: targetUserId },
+        { 
+          $set: {
+            username: '[Utente cancellato]',
+            firstName: '[Utente cancellato]',
+            lastName: '[Utente cancellato]',
+            activeAnnouncements: { sell: null, buy: null }
+          }
+        }
+      );
+      
+      // Non eliminiamo completamente l'utente per mantenere la storia delle transazioni,
+      // ma rimuoviamo tutti i dati personali
+      
+      await ctx.reply(`✅ I dati dell'utente ${targetUserId} sono stati cancellati con successo dal sistema.\n\nLe transazioni storiche sono state anonimizzate, ma rimangono nel sistema per scopi di audit.`);
+      
+      // Prova a notificare l'utente
+      try {
+        await bot.telegram.sendMessage(targetUserId, `ℹ️ I tuoi dati sono stati cancellati da un amministratore su tua richiesta.`);
+      } catch (notifyErr) {
+        logger.warn(`Impossibile notificare l'utente ${targetUserId} della cancellazione dei dati:`, notifyErr);
+        // Ignora l'errore, non è critico
+      }
+      
+      return true; // Impedisce che altri handler gestiscano questo messaggio
+    } catch (err) {
+      logger.error(`Errore nella cancellazione dei dati dell'utente ${targetUserId}:`, err);
+      await ctx.reply('❌ Si è verificato un errore durante la cancellazione dei dati. Per favore, contatta l\'amministratore.');
+      return true; // Impedisce che altri handler gestiscano questo messaggio
+    }
+  }
+  
+  return false; // Permette ad altri handler di gestire questo messaggio
+};
+
 module.exports = {
   startCommand,
   sellKwhCommand,
@@ -436,5 +734,9 @@ module.exports = {
   helpCommand,
   startChargeCommand,
   updateBotCommandsCommand,
-  cancelCommand
+  cancelCommand,
+  archiveAnnouncementCommand,
+  deleteUserDataCommand,
+  addFeedbackCommand,
+  deleteUserDataHandler
 };
