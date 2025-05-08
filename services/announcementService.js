@@ -101,8 +101,8 @@ const publishAnnouncement = async (announcement, user) => {
     try {
       // 1. Prima invia solo il testo dell'annuncio
       const messageText = announcement.type === 'sell' ? 
-        formatSellAnnouncement(announcement, user) : 
-        formatBuyAnnouncement(announcement, user);
+        escapeMarkdownV2(formatSellAnnouncement(announcement, user)) : 
+        escapeMarkdownV2(formatBuyAnnouncement(announcement, user));
       
       // Invia il messaggio principale senza bottoni
       const mainMessage = await bot.telegram.sendMessage(
