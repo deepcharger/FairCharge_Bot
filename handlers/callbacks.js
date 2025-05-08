@@ -88,19 +88,43 @@ const cancelSellCallback = async (ctx) => {
   return ctx.scene.leave();
 };
 
-// Handler per iniziare l'acquisto di kWh da un annuncio
+// Handler per iniziare l'acquisto di kWh da un annuncio - Versione ultra-robusta
 const buyKwhCallback = async (ctx) => {
+  if (!ctx || !ctx.match || !ctx.match[1]) {
+    console.error('Contesto incompleto nella buyKwhCallback');
+    return;
+  }
+  
   const announcementId = ctx.match[1];
   
   try {
+    // Verifica che ctx.from esista e abbia un id valido
+    if (!ctx.from || !ctx.from.id) {
+      console.error('ctx.from o ctx.from.id mancante in buyKwhCallback');
+      return;
+    }
+    
     // Verifica se l'utente ha già avviato il bot in privato
     const user = await User.findOne({ userId: ctx.from.id });
     
     if (!user) {
       // Utente non ha mai avviato il bot, crea un deep link
-      const deepLink = `https://t.me/${bot.botInfo.username}?start=buy_${announcementId}`;
+      // Verifica che bot.botInfo e bot.botInfo.username esistano
+      let botUsername = '';
+      try {
+        botUsername = bot.botInfo ? bot.botInfo.username : 'FairChargeProBot';
+      } catch (e) {
+        botUsername = 'FairChargeProBot';
+      }
       
-      await ctx.answerCbQuery('Per procedere, avvia prima il bot in privato');
+      const deepLink = `https://t.me/${botUsername}?start=buy_${announcementId}`;
+      
+      try {
+        await ctx.answerCbQuery('Per procedere, avvia prima il bot in privato');
+      } catch (e) {
+        console.error('Errore answerCbQuery:', e);
+      }
+      
       await ctx.reply('Per procedere con l\'acquisto, devi prima avviare il bot in chat privata.', {
         reply_markup: {
           inline_keyboard: [
@@ -113,12 +137,18 @@ const buyKwhCallback = async (ctx) => {
     }
     
     // Utente già registrato, memorizza l'ID annuncio e avvia il wizard
+    if (!ctx.scene) ctx.scene = {};
     ctx.scene.state = ctx.scene.state || {}; // Assicurati che ctx.scene.state esista
     ctx.scene.state.announcementId = announcementId;
-    await ctx.answerCbQuery('Procedura di acquisto avviata');
+    
+    try {
+      await ctx.answerCbQuery('Procedura di acquisto avviata');
+    } catch (e) {
+      console.error('Errore in answerCbQuery:', e);
+    }
     
     // Passa alla chat privata se siamo in un gruppo
-    if (ctx.chat.type !== 'private') {
+    if (ctx.chat && ctx.chat.type !== 'private') {
       await ctx.reply(`📱 Per procedere con l'acquisto, ti invio un messaggio in privato.`);
       try {
         await bot.telegram.sendMessage(ctx.from.id, '🔋 *Procediamo con l\'acquisto kWh...*', {
@@ -126,16 +156,24 @@ const buyKwhCallback = async (ctx) => {
         });
         
         // Avvia il wizard nella chat privata
-        const stage = ctx.scene.stage;
-        const wizard = stage.scenes.get('BUY_KWH_WIZARD');
-        
-        // Imposta manualmente lo stato
-        ctx.wizard = { state: { announcementId } };
-        await wizard.steps[0](ctx);
+        if (ctx.scene && ctx.scene.stage) {
+          const stage = ctx.scene.stage;
+          const wizard = stage.scenes.get('BUY_KWH_WIZARD');
+          
+          if (wizard) {
+            // Imposta manualmente lo stato
+            ctx.wizard = { state: { announcementId } };
+            await wizard.steps[0](ctx);
+          } else {
+            throw new Error('Wizard BUY_KWH_WIZARD non trovato');
+          }
+        } else {
+          throw new Error('ctx.scene o ctx.scene.stage non disponibili');
+        }
       } catch (error) {
         // Questo errore si verifica se l'utente non ha mai interagito con il bot in privato
         logger.error('Errore nell\'invio del messaggio privato:', error);
-        const deepLink = `https://t.me/${bot.botInfo.username}?start=buy_${announcementId}`;
+        const deepLink = `https://t.me/${bot.botInfo?.username || 'FairChargeProBot'}?start=buy_${announcementId}`;
         await ctx.reply('Non riesco a inviarti un messaggio privato. Avvia prima il bot in chat privata.', {
           reply_markup: {
             inline_keyboard: [
@@ -148,10 +186,19 @@ const buyKwhCallback = async (ctx) => {
       return;
     }
     
-    return ctx.scene.enter('BUY_KWH_WIZARD');
+    // Siamo già in chat privata, verifica che ctx.scene.enter esista
+    if (ctx.scene && typeof ctx.scene.enter === 'function') {
+      return ctx.scene.enter('BUY_KWH_WIZARD');
+    } else {
+      throw new Error('ctx.scene.enter non è una funzione');
+    }
   } catch (err) {
     logger.error('Errore nell\'avvio della procedura di acquisto:', err);
-    await ctx.answerCbQuery('Si è verificato un errore');
+    try {
+      await ctx.answerCbQuery('Si è verificato un errore');
+    } catch (e) {
+      console.error('Errore in answerCbQuery:', e);
+    }
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
