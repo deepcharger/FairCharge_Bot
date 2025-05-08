@@ -20,7 +20,7 @@ const getBotModule = () => {
 };
 
 /**
- * Crea un nuovo annuncio di vendita
+ * Crea un nuovo annuncio di vendita con ID personalizzato
  * @param {Object} announcementData - Dati dell'annuncio
  * @param {Number} userId - ID dell'utente che crea l'annuncio
  * @returns {Promise<Object>} L'annuncio creato
@@ -29,8 +29,19 @@ const createSellAnnouncement = async (announcementData, userId) => {
   try {
     logger.info(`Creazione nuovo annuncio di vendita per l'utente ${userId}`, { announcementData });
     
+    // Genera un ID personalizzato nel formato userId_yyyy-MM-dd_HH-mm
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    
+    const customId = `${userId}_${year}-${month}-${day}_${hours}-${minutes}`;
+    
     // Crea l'annuncio nel database
     const newAnnouncement = new Announcement({
+      _id: customId, // ID personalizzato
       type: 'sell',
       userId: userId,
       price: announcementData.price,
@@ -42,7 +53,7 @@ const createSellAnnouncement = async (announcementData, userId) => {
     });
     
     await newAnnouncement.save();
-    logger.debug(`Annuncio creato con ID: ${newAnnouncement._id}`);
+    logger.debug(`Annuncio creato con ID personalizzato: ${customId}`);
     return newAnnouncement;
   } catch (err) {
     logger.error('Errore nella creazione dell\'annuncio:', err);
