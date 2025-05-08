@@ -14,8 +14,22 @@ const buyKwhScene = new Scenes.WizardScene(
   // Passo 1: Mostra l'annuncio selezionato e chiede conferma
   async (ctx) => {
     try {
-      // Estrai l'ID dell'annuncio dai dati della callback
-      const announcementId = ctx.wizard.state.announcementId;
+      // Estrai l'ID dell'annuncio dalla sessione o dai dati del wizard
+      const announcementId = ctx.session.announcementId || (ctx.wizard.state && ctx.wizard.state.announcementId);
+      
+      if (!announcementId) {
+        await ctx.reply('❌ Nessun annuncio selezionato. Riprova dalla chat di gruppo.');
+        return ctx.scene.leave();
+      }
+      
+      // Memorizza l'ID nel wizard state
+      ctx.wizard.state = ctx.wizard.state || {};
+      ctx.wizard.state.announcementId = announcementId;
+      
+      // Pulisci l'ID dalla sessione per evitare problemi in future interazioni
+      if (ctx.session.announcementId) {
+        delete ctx.session.announcementId;
+      }
       
       // Trova l'annuncio
       const announcement = await Announcement.findById(announcementId);
