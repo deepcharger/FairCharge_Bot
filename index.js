@@ -146,6 +146,12 @@ const setupBot = () => {
 // Funzione per acquisire il lock nel database
 const acquireLock = async () => {
   try {
+    // Prima verifichiamo se stiamo già in fase di chiusura
+    if (isShuttingDown) {
+      logger.warn('Tentativo di acquisire lock durante fase di chiusura. Abortito.');
+      return;
+    }
+    
     // Creiamo un documento di lock
     await BotLock.create({
       lockId: 'bot_lock',
@@ -161,22 +167,49 @@ const acquireLock = async () => {
     await startBot();
     
     // Imposta un timer per aggiornare periodicamente il lock
+    if (lockCheckInterval) {
+      clearInterval(lockCheckInterval);
+    }
+    
     lockCheckInterval = setInterval(async () => {
-      if (isShuttingDown) return;
+      if (isShuttingDown) {
+        // Se siamo in fase di chiusura, ferma l'intervallo
+        if (lockCheckInterval) {
+          clearInterval(lockCheckInterval);
+          lockCheckInterval = null;
+        }
+        return;
+      }
       
       try {
         // Aggiorna il timestamp del documento lock per evitare che scada
-        await BotLock.updateOne(
+        const result = await BotLock.updateOne(
           { lockId: 'bot_lock', instanceId: INSTANCE_ID },
           { $set: { createdAt: new Date() } }
         );
         
-        // Verifica anche che il lock sia ancora nostro
-        const lock = await BotLock.findOne({ lockId: 'bot_lock' });
-        
-        if (!lock || lock.instanceId !== INSTANCE_ID) {
-          logger.warn(`Il lock è stato acquisito da un'altra istanza: ${lock?.instanceId}. Termino.`);
-          gracefulShutdown('LOCK_LOST');
+        // Se l'aggiornamento non ha toccato nessun documento, il lock è andato perso
+        if (result.matchedCount === 0) {
+          logger.warn(`Il lock non esiste più. Tentativo di riacquisizione.`);
+          
+          // Verifica anche che il lock sia ancora nostro
+          const lock = await BotLock.findOne({ lockId: 'bot_lock' });
+          
+          if (!lock) {
+            // Se il lock non esiste, prova a riottenerlo
+            logger.info('Lock non trovato, provo ad acquisirlo di nuovo.');
+            
+            try {
+              await acquireLock();
+            } catch (lockErr) {
+              if (lockErr.code !== 11000) { // Non è un errore di duplicazione
+                logger.error('Errore nella riacquisizione del lock:', lockErr);
+              }
+            }
+          } else if (lock.instanceId !== INSTANCE_ID) {
+            logger.warn(`Il lock è stato acquisito da un'altra istanza: ${lock.instanceId}. Termino.`);
+            await gracefulShutdown('LOCK_LOST');
+          }
         }
       } catch (err) {
         logger.error('Errore nell\'aggiornamento del lock:', err);
@@ -184,9 +217,18 @@ const acquireLock = async () => {
         // Verifica se il lock esiste ancora
         try {
           const lock = await BotLock.findOne({ lockId: 'bot_lock' });
-          if (!lock || lock.instanceId !== INSTANCE_ID) {
-            logger.warn('Lock non disponibile o acquisito da altra istanza. Termino.');
-            gracefulShutdown('LOCK_ERROR');
+          if (!lock) {
+            logger.warn('Lock non disponibile. Tento di riottenerlo.');
+            try {
+              await acquireLock();
+            } catch (acquireErr) {
+              if (acquireErr.code !== 11000) { // Non è un errore di duplicazione
+                logger.error('Errore nella riacquisizione del lock:', acquireErr);
+              }
+            }
+          } else if (lock.instanceId !== INSTANCE_ID) {
+            logger.warn(`Lock appartenente ad altra istanza: ${lock.instanceId}. Termino.`);
+            await gracefulShutdown('LOCK_ERROR');
           }
         } catch (checkErr) {
           logger.error('Errore nella verifica del lock:', checkErr);
@@ -200,13 +242,17 @@ const acquireLock = async () => {
       
       // Verifica se l'istanza corrente può acquisire il lock
       setTimeout(async () => {
+        if (isShuttingDown) return; // Non procedere se in fase di chiusura
+        
         try {
           // Controlla se il lock esiste e se appartiene a qualcun altro
           const existingLock = await BotLock.findOne({ lockId: 'bot_lock' });
           
           if (!existingLock) {
             logger.info('Lock non trovato, provo ad acquisirlo di nuovo.');
-            await acquireLock();
+            if (!isShuttingDown) {
+              await acquireLock();
+            }
           } else {
             logger.info(`Lock attualmente detenuto da: ${existingLock.instanceId}`);
             
@@ -217,46 +263,75 @@ const acquireLock = async () => {
             if (lockAge > 45000) { // 45 secondi
               logger.warn(`Lock vecchio (${Math.round(lockAge/1000)}s), tento di sostituirlo.`);
               
+              if (isShuttingDown) return; // Non procedere se in fase di chiusura
+              
               try {
-                await BotLock.deleteOne({ lockId: 'bot_lock' });
-                logger.info('Lock vecchio rimosso, provo a riottenerlo.');
-                await acquireLock();
+                const deleteResult = await BotLock.deleteOne({
+                  lockId: 'bot_lock',
+                  instanceId: existingLock.instanceId
+                });
+                
+                if (deleteResult.deletedCount > 0) {
+                  logger.info('Lock vecchio rimosso, provo a riottenerlo.');
+                  if (!isShuttingDown) {
+                    await acquireLock();
+                  }
+                } else {
+                  logger.warn('Lock vecchio non rimosso, già cambiato?');
+                  // Attendi e riprova
+                  if (!isShuttingDown) {
+                    setTimeout(() => acquireLock(), 15000);
+                  }
+                }
               } catch (delErr) {
                 logger.error('Errore nella rimozione del lock vecchio:', delErr);
                 
                 // Attendi e riprova
-                setTimeout(() => acquireLock(), 15000);
+                if (!isShuttingDown) {
+                  setTimeout(() => acquireLock(), 15000);
+                }
               }
             } else {
               // Lock recente, attendi e riprova
               logger.info(`Lock recente (${Math.round(lockAge/1000)}s), riprovo tra 30 secondi.`);
-              setTimeout(() => acquireLock(), 30000);
+              if (!isShuttingDown) {
+                setTimeout(() => acquireLock(), 30000);
+              }
             }
           }
         } catch (checkErr) {
           logger.error('Errore nel controllo del lock esistente:', checkErr);
-          setTimeout(() => acquireLock(), 30000);
+          if (!isShuttingDown) {
+            setTimeout(() => acquireLock(), 30000);
+          }
         }
       }, 10000);
     } else {
       logger.error('Errore nell\'acquisizione del lock:', err);
-      setTimeout(() => acquireLock(), 15000);
+      if (!isShuttingDown) {
+        setTimeout(() => acquireLock(), 15000);
+      }
     }
   }
 };
 
 // Funzione per avviare il bot con diverse strategie
 const startBot = async (attempt = 1, maxAttempts = 3) => {
+  if (isShuttingDown) {
+    logger.warn('Tentativo di avvio del bot durante fase di chiusura. Abortito.');
+    return false;
+  }
+  
   if (attempt > maxAttempts) {
     logger.error(`Tentativi di avvio del bot esauriti dopo ${maxAttempts} tentativi`);
     await releaseLock();
-    gracefulShutdown('STARTUP_FAILURE');
-    return;
+    await gracefulShutdown('STARTUP_FAILURE');
+    return false;
   }
   
   try {
     // Strategia 1: Prima proviamo a rimuovere i webhook
-    await botInstance.telegram.deleteWebhook();
+    await botInstance.telegram.deleteWebhook({ drop_pending_updates: true });
     logger.info(`[Tentativo ${attempt}] Webhook rimossi`);
     
     // Attendi un breve momento
@@ -265,6 +340,7 @@ const startBot = async (attempt = 1, maxAttempts = 3) => {
     try {
       // Strategia 2: Avvia il bot con polling aggressivo
       await botInstance.launch({
+        dropPendingUpdates: true,
         polling: {
           timeout: 10, // Timeout molto breve
           limit: 100,
@@ -275,50 +351,31 @@ const startBot = async (attempt = 1, maxAttempts = 3) => {
       logger.info(`Bot avviato con successo in modalità polling (tentativo ${attempt})`);
       return true;
     } catch (pollingError) {
+      if (isShuttingDown) {
+        logger.info('Bot in fase di chiusura, interrompo i tentativi di avvio');
+        return false;
+      }
+      
       if (pollingError.message?.includes('409: Conflict')) {
-        logger.warn(`[Tentativo ${attempt}] Errore 409 ricevuto con polling normale, provo strategia alternativa...`);
+        logger.warn(`[Tentativo ${attempt}] Errore 409: Conflict. Rilascio il lock e termino.`);
         
-        // Strategia 3: Usare una tecnica di forza bruta per ri-autenticarsi
-        try {
-          // Metodo aggressivo: Forza il reset della sessione di telegram tramite API web diretta
-          const apiUrl = `https://api.telegram.org/bot${process.env.BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
-          const response = await fetch(apiUrl);
-          const data = await response.json();
-          
-          logger.info(`[Tentativo ${attempt}] Reset forzato dell'API: ${JSON.stringify(data)}`);
-          
-          // Attendi un po' più a lungo
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          
-          // Crea una nuova istanza del bot con nuove opzioni
-          botInstance = setupBot();
-          
-          // Ultimo tentativo di avvio
-          await botInstance.launch({
-            polling: {
-              timeout: 5, // Timeout molto breve
-              limit: 50
-            }
-          });
-          
-          logger.info(`Bot avviato con successo in modalità polling alternativa (tentativo ${attempt})`);
-          return true;
-        } catch (finalError) {
-          logger.error(`[Tentativo ${attempt}] Anche la strategia alternativa è fallita:`, finalError);
-          
-          // Se siamo ancora al tentativo 1 o 2, riprova con intervallo crescente
-          const retryDelay = attempt * 15000; // 15s, 30s, 45s...
-          logger.info(`Riprovo l'avvio tra ${retryDelay/1000} secondi (tentativo ${attempt + 1}/${maxAttempts})...`);
-          
-          await new Promise(resolve => setTimeout(resolve, retryDelay));
-          return await startBot(attempt + 1, maxAttempts);
-        }
+        // Rilascia immediatamente il lock
+        await releaseLock();
+        
+        // Termina l'esecuzione con un codice specifico
+        await gracefulShutdown('CONFLICT_ERROR');
+        return false;
       } else {
         // Altro tipo di errore non relativo al conflitto
         throw pollingError;
       }
     }
   } catch (error) {
+    if (isShuttingDown) {
+      logger.info('Bot in fase di chiusura, interrompo i tentativi di avvio');
+      return false;
+    }
+    
     logger.error(`[Tentativo ${attempt}] Errore nell'avvio del bot:`, error);
     
     // Se non siamo all'ultimo tentativo, riprova
@@ -331,7 +388,7 @@ const startBot = async (attempt = 1, maxAttempts = 3) => {
     } else {
       // All'ultimo tentativo, rilascia il lock e termina
       await releaseLock();
-      gracefulShutdown('STARTUP_ERROR');
+      await gracefulShutdown('STARTUP_ERROR');
       return false;
     }
   }
@@ -345,8 +402,16 @@ const releaseLock = async () => {
       lockCheckInterval = null;
     }
     
-    await BotLock.deleteOne({ lockId: 'bot_lock', instanceId: INSTANCE_ID });
-    logger.info(`Lock rilasciato da ${INSTANCE_ID}`);
+    const result = await BotLock.deleteOne({ 
+      lockId: 'bot_lock', 
+      instanceId: INSTANCE_ID 
+    });
+    
+    if (result.deletedCount > 0) {
+      logger.info(`Lock rilasciato da ${INSTANCE_ID}`);
+    } else {
+      logger.warn(`Nessun lock da rilasciare per ${INSTANCE_ID}`);
+    }
   } catch (err) {
     logger.error('Errore nel rilascio del lock:', err);
   }
@@ -354,7 +419,12 @@ const releaseLock = async () => {
 
 // Gestione della terminazione graceful
 const gracefulShutdown = async (signal) => {
-  if (isShuttingDown) return;
+  // Prevenire chiamate multiple
+  if (isShuttingDown) {
+    logger.info(`Shutdown già in corso (segnale: ${signal}), ignoro.`);
+    return;
+  }
+  
   isShuttingDown = true;
   
   logger.info(`Bot in fase di terminazione (${signal})`);
@@ -365,7 +435,8 @@ const gracefulShutdown = async (signal) => {
   // Ferma il bot
   if (botInstance) {
     try {
-      botInstance.stop(signal);
+      await botInstance.stop(signal);
+      logger.info('Bot fermato con successo');
     } catch (err) {
       logger.error('Errore nell\'arresto del bot:', err);
     }
