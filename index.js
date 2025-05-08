@@ -9,6 +9,7 @@ const logger = require('./utils/logger');
 const { sceneCleanerMiddleware, setupPeriodicCleaner } = require('./utils/sceneCleaner');
 const mongoose = require('mongoose');
 const { Telegraf } = require('telegraf');
+const fetch = require('node-fetch');
 
 // Flag per tracciare lo stato di shutdown
 let isShuttingDown = false;
@@ -280,9 +281,8 @@ const startBot = async (attempt = 1, maxAttempts = 3) => {
         // Strategia 3: Usare una tecnica di forza bruta per ri-autenticarsi
         try {
           // Metodo aggressivo: Forza il reset della sessione di telegram tramite API web diretta
-          const fetch = await import('node-fetch');
           const apiUrl = `https://api.telegram.org/bot${process.env.BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
-          const response = await fetch.default(apiUrl);
+          const response = await fetch(apiUrl);
           const data = await response.json();
           
           logger.info(`[Tentativo ${attempt}] Reset forzato dell'API: ${JSON.stringify(data)}`);
