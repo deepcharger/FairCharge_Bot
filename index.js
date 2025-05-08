@@ -8,11 +8,12 @@ const middleware = require('./handlers/middleware');
 const logger = require('./utils/logger');
 const { sceneCleanerMiddleware, setupPeriodicCleaner } = require('./utils/sceneCleaner');
 const mongoose = require('mongoose');
+const { Telegraf } = require('telegraf');
 
 // Flag per tracciare lo stato di shutdown
 let isShuttingDown = false;
 let lockCheckInterval = null;
-let botRunning = false;
+let botInstance = null;
 
 // Schema per il lock del bot
 const botLockSchema = new mongoose.Schema({
@@ -38,9 +39,6 @@ const init = async () => {
     // Assicurati che l'indice TTL sia impostato
     await BotLock.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 });
     
-    // Imposta i middleware e i gestori
-    setupBot();
-    
     // Tenta di acquisire il lock per avviare il bot
     await acquireLock();
   } catch (err) {
@@ -51,8 +49,24 @@ const init = async () => {
 
 // Configura il bot con tutti i middleware e gli handler
 const setupBot = () => {
+  // IMPORTANTE: Crea una nuova istanza del bot per evitare problemi di stato condiviso
+  const token = process.env.BOT_TOKEN;
+  
+  // Se l'istanza esistente del bot esiste, la fermiamo prima
+  if (botInstance) {
+    try {
+      botInstance.stop();
+      logger.info('Istanza precedente del bot fermata');
+    } catch (err) {
+      logger.warn('Errore nell\'arresto dell\'istanza precedente:', err);
+    }
+  }
+  
+  // Crea una nuova istanza del bot
+  botInstance = new Telegraf(token);
+  
   // Middleware di logging per tutte le richieste
-  bot.use((ctx, next) => {
+  botInstance.use((ctx, next) => {
     const start = Date.now();
     return next().then(() => {
       const responseTime = Date.now() - start;
@@ -61,69 +75,71 @@ const setupBot = () => {
   });
 
   // Registra i middleware
-  bot.use(middleware.session());
-  bot.use(stage.middleware());
+  botInstance.use(middleware.session());
+  botInstance.use(stage.middleware());
 
   // Aggiungi il middleware di pulizia delle scene
-  bot.use(sceneCleanerMiddleware());
+  botInstance.use(sceneCleanerMiddleware());
 
   // Configura la pulizia periodica delle sessioni inattive
-  setupPeriodicCleaner(bot);
+  setupPeriodicCleaner(botInstance);
 
   // Registra i gestori dei comandi
-  bot.start(commands.startCommand);
-  bot.command('vendi_kwh', commands.sellKwhCommand);
-  bot.command('le_mie_ricariche', commands.myChargesCommand);
-  bot.command('profilo', commands.profileCommand);
-  bot.command('help', commands.helpCommand);
-  bot.command('avvio_ricarica', commands.startChargeCommand);
-  bot.command('update_commands', commands.updateBotCommandsCommand);
-  bot.command('annulla', commands.cancelCommand);
+  botInstance.start(commands.startCommand);
+  botInstance.command('vendi_kwh', commands.sellKwhCommand);
+  botInstance.command('le_mie_ricariche', commands.myChargesCommand);
+  botInstance.command('profilo', commands.profileCommand);
+  botInstance.command('help', commands.helpCommand);
+  botInstance.command('avvio_ricarica', commands.startChargeCommand);
+  botInstance.command('update_commands', commands.updateBotCommandsCommand);
+  botInstance.command('annulla', commands.cancelCommand);
 
   // Registra i gestori delle callback
-  bot.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
+  botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
   // Modificato da connector_ a current_ per corrispondere al pattern nella scene
-  bot.action(/current_(.+)/, callbacks.connectorTypeCallback);
-  bot.action('publish_sell', callbacks.publishSellCallback);
-  bot.action('cancel_sell', callbacks.cancelSellCallback);
-  bot.action('accept_conditions', callbacks.acceptConditionsCallback);
-  bot.action('cancel_buy', callbacks.cancelBuyCallback);
-  bot.action('send_request', callbacks.sendRequestCallback);
-  bot.action(/accept_offer_(.+)/, callbacks.acceptOfferCallback);
-  bot.action(/reject_offer_(.+)/, callbacks.rejectOfferCallback);
-  bot.action(/ready_to_charge_(.+)/, callbacks.readyToChargeCallback);
-  bot.action(/charging_started_(.+)/, callbacks.chargingStartedCallback);
-  bot.action(/charging_ok_(.+)/, callbacks.chargingOkCallback);
-  bot.action(/charging_issues_(.+)/, callbacks.chargingIssuesCallback);
-  bot.action(/charging_completed_(.+)/, callbacks.chargingCompletedCallback);
-  bot.action(/confirm_kwh_(.+)/, callbacks.confirmKwhCallback);
-  bot.action(/dispute_kwh_(.+)/, callbacks.disputeKwhCallback);
-  bot.action(/set_payment_(.+)/, callbacks.setPaymentCallback);
-  bot.action(/payment_sent_(.+)/, callbacks.paymentSentCallback);
-  bot.action(/payment_confirmed_(.+)/, callbacks.paymentConfirmedCallback);
-  bot.action(/payment_not_received_(.+)/, callbacks.paymentNotReceivedCallback);
-  bot.action(/donate_2_(.+)/, callbacks.donateFixedCallback);
-  bot.action(/donate_custom_(.+)/, callbacks.donateCustomCallback);
-  bot.action(/donate_skip_(.+)/, callbacks.donateSkipCallback);
-  bot.action(/feedback_positive_(.+)/, callbacks.feedbackPositiveCallback);
-  bot.action(/feedback_negative_(.+)/, callbacks.feedbackNegativeCallback);
-  bot.action(/cancel_charge_(.+)/, callbacks.cancelChargeCallback);
-  bot.action('send_manual_request', callbacks.sendManualRequestCallback);
-  bot.action('cancel_manual_request', callbacks.cancelManualRequestCallback);
+  botInstance.action(/current_(.+)/, callbacks.connectorTypeCallback);
+  botInstance.action('publish_sell', callbacks.publishSellCallback);
+  botInstance.action('cancel_sell', callbacks.cancelSellCallback);
+  botInstance.action('accept_conditions', callbacks.acceptConditionsCallback);
+  botInstance.action('cancel_buy', callbacks.cancelBuyCallback);
+  botInstance.action('send_request', callbacks.sendRequestCallback);
+  botInstance.action(/accept_offer_(.+)/, callbacks.acceptOfferCallback);
+  botInstance.action(/reject_offer_(.+)/, callbacks.rejectOfferCallback);
+  botInstance.action(/ready_to_charge_(.+)/, callbacks.readyToChargeCallback);
+  botInstance.action(/charging_started_(.+)/, callbacks.chargingStartedCallback);
+  botInstance.action(/charging_ok_(.+)/, callbacks.chargingOkCallback);
+  botInstance.action(/charging_issues_(.+)/, callbacks.chargingIssuesCallback);
+  botInstance.action(/charging_completed_(.+)/, callbacks.chargingCompletedCallback);
+  botInstance.action(/confirm_kwh_(.+)/, callbacks.confirmKwhCallback);
+  botInstance.action(/dispute_kwh_(.+)/, callbacks.disputeKwhCallback);
+  botInstance.action(/set_payment_(.+)/, callbacks.setPaymentCallback);
+  botInstance.action(/payment_sent_(.+)/, callbacks.paymentSentCallback);
+  botInstance.action(/payment_confirmed_(.+)/, callbacks.paymentConfirmedCallback);
+  botInstance.action(/payment_not_received_(.+)/, callbacks.paymentNotReceivedCallback);
+  botInstance.action(/donate_2_(.+)/, callbacks.donateFixedCallback);
+  botInstance.action(/donate_custom_(.+)/, callbacks.donateCustomCallback);
+  botInstance.action(/donate_skip_(.+)/, callbacks.donateSkipCallback);
+  botInstance.action(/feedback_positive_(.+)/, callbacks.feedbackPositiveCallback);
+  botInstance.action(/feedback_negative_(.+)/, callbacks.feedbackNegativeCallback);
+  botInstance.action(/cancel_charge_(.+)/, callbacks.cancelChargeCallback);
+  botInstance.action('send_manual_request', callbacks.sendManualRequestCallback);
+  botInstance.action('cancel_manual_request', callbacks.cancelManualRequestCallback);
 
   // Gestione dei messaggi nei topic
-  bot.on(['message', 'channel_post'], middleware.topicMessageHandler);
+  botInstance.on(['message', 'channel_post'], middleware.topicMessageHandler);
 
   // Gestione dei messaggi di testo (per handler specifici)
-  bot.on('text', middleware.textMessageHandler);
+  botInstance.on('text', middleware.textMessageHandler);
 
   // Gestione dei messaggi con foto
-  bot.on('photo', middleware.photoMessageHandler);
+  botInstance.on('photo', middleware.photoMessageHandler);
 
   // Gestione degli errori
-  bot.catch((err, ctx) => {
+  botInstance.catch((err, ctx) => {
     logger.error(`Errore per ${ctx.updateType}:`, err);
   });
+  
+  return botInstance;
 };
 
 // Funzione per acquisire il lock nel database
@@ -136,6 +152,9 @@ const acquireLock = async () => {
     });
     
     logger.info(`Lock acquisito con successo da ${INSTANCE_ID}`);
+    
+    // Configura una nuova istanza del bot
+    setupBot();
     
     // Avvia il bot
     await startBot();
@@ -225,38 +244,95 @@ const acquireLock = async () => {
   }
 };
 
-// Funzione per avviare il bot
-const startBot = async () => {
+// Funzione per avviare il bot con diverse strategie
+const startBot = async (attempt = 1, maxAttempts = 3) => {
+  if (attempt > maxAttempts) {
+    logger.error(`Tentativi di avvio del bot esauriti dopo ${maxAttempts} tentativi`);
+    await releaseLock();
+    gracefulShutdown('STARTUP_FAILURE');
+    return;
+  }
+  
   try {
-    // Prima assicuriamoci che non ci siano webhook attivi
-    await bot.telegram.deleteWebhook();
-    logger.info('Eventuali webhook precedenti rimossi');
+    // Strategia 1: Prima proviamo a rimuovere i webhook
+    await botInstance.telegram.deleteWebhook();
+    logger.info(`[Tentativo ${attempt}] Webhook rimossi`);
     
-    // Attendiamo un breve momento dopo aver rimosso il webhook
+    // Attendi un breve momento
     await new Promise(resolve => setTimeout(resolve, 2000));
     
-    // Avvia il bot in modalità polling
-    await bot.launch({
-      polling: {
-        timeout: 30, // Timeout ridotto per essere più reattivi
-        limit: 100   // Numero max di aggiornamenti da ottenere
+    try {
+      // Strategia 2: Avvia il bot con polling aggressivo
+      await botInstance.launch({
+        polling: {
+          timeout: 10, // Timeout molto breve
+          limit: 100,
+          allowedUpdates: ['message', 'callback_query', 'inline_query', 'edited_message', 'channel_post']
+        }
+      });
+      
+      logger.info(`Bot avviato con successo in modalità polling (tentativo ${attempt})`);
+      return true;
+    } catch (pollingError) {
+      if (pollingError.message?.includes('409: Conflict')) {
+        logger.warn(`[Tentativo ${attempt}] Errore 409 ricevuto con polling normale, provo strategia alternativa...`);
+        
+        // Strategia 3: Usare una tecnica di forza bruta per ri-autenticarsi
+        try {
+          // Metodo aggressivo: Forza il reset della sessione di telegram tramite API web diretta
+          const fetch = await import('node-fetch');
+          const apiUrl = `https://api.telegram.org/bot${process.env.BOT_TOKEN}/deleteWebhook?drop_pending_updates=true`;
+          const response = await fetch.default(apiUrl);
+          const data = await response.json();
+          
+          logger.info(`[Tentativo ${attempt}] Reset forzato dell'API: ${JSON.stringify(data)}`);
+          
+          // Attendi un po' più a lungo
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          // Crea una nuova istanza del bot con nuove opzioni
+          botInstance = setupBot();
+          
+          // Ultimo tentativo di avvio
+          await botInstance.launch({
+            polling: {
+              timeout: 5, // Timeout molto breve
+              limit: 50
+            }
+          });
+          
+          logger.info(`Bot avviato con successo in modalità polling alternativa (tentativo ${attempt})`);
+          return true;
+        } catch (finalError) {
+          logger.error(`[Tentativo ${attempt}] Anche la strategia alternativa è fallita:`, finalError);
+          
+          // Se siamo ancora al tentativo 1 o 2, riprova con intervallo crescente
+          const retryDelay = attempt * 15000; // 15s, 30s, 45s...
+          logger.info(`Riprovo l'avvio tra ${retryDelay/1000} secondi (tentativo ${attempt + 1}/${maxAttempts})...`);
+          
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          return await startBot(attempt + 1, maxAttempts);
+        }
+      } else {
+        // Altro tipo di errore non relativo al conflitto
+        throw pollingError;
       }
-    });
-    
-    botRunning = true;
-    logger.info('Bot avviato con successo in modalità polling (Background Worker)');
+    }
   } catch (error) {
-    logger.error('Errore nell\'avvio del bot:', error);
+    logger.error(`[Tentativo ${attempt}] Errore nell'avvio del bot:`, error);
     
-    // Se abbiamo un errore 409, rilasciamo il lock e terminiamo
-    if (error.message && error.message.includes('409: Conflict')) {
-      logger.warn('Errore 409: Conflict. Rilascio il lock e termino.');
-      await releaseLock();
-      gracefulShutdown('CONFLICT_ERROR');
+    // Se non siamo all'ultimo tentativo, riprova
+    if (attempt < maxAttempts) {
+      const retryDelay = attempt * 10000; // 10s, 20s, 30s...
+      logger.info(`Riprovo l'avvio tra ${retryDelay/1000} secondi (tentativo ${attempt + 1}/${maxAttempts})...`);
+      
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      return await startBot(attempt + 1, maxAttempts);
     } else {
-      // Per altri errori, riprova tra 30 secondi
-      logger.info('Riprovo l\'avvio tra 30 secondi...');
-      setTimeout(startBot, 30000);
+      // All'ultimo tentativo, rilascia il lock e termina
+      await releaseLock();
+      gracefulShutdown('STARTUP_ERROR');
+      return false;
     }
   }
 };
@@ -287,9 +363,9 @@ const gracefulShutdown = async (signal) => {
   await releaseLock();
   
   // Ferma il bot
-  if (botRunning) {
+  if (botInstance) {
     try {
-      bot.stop(signal);
+      botInstance.stop(signal);
     } catch (err) {
       logger.error('Errore nell\'arresto del bot:', err);
     }
