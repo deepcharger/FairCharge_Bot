@@ -11,22 +11,32 @@ const userSchema = new mongoose.Schema({
   totalRatings: { type: Number, default: 0 },
   balance: { type: Number, default: 0 }, // saldo in kWh
   activeAnnouncements: {
-    sell: { type: mongoose.Schema.Types.ObjectId, ref: 'Announcement', default: null },
-    buy: { type: mongoose.Schema.Types.ObjectId, ref: 'Announcement', default: null }
+    sell: { type: String, ref: 'Announcement', default: null },
+    buy: { type: String, ref: 'Announcement', default: null }
   },
   transactions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }]
 });
 
-// Calcola la percentuale di feedback positivi
+/**
+ * Calcola la percentuale di feedback positivi
+ * @returns {Number|null} Percentuale di feedback positivi o null se non ci sono recensioni
+ */
 userSchema.methods.getPositivePercentage = function() {
   if (this.totalRatings === 0) return null;
-  return Math.round((this.positiveRatings / this.totalRatings) * 100);
+  
+  // Arrotonda a due decimali e converte in numero intero
+  const percentage = Math.round((this.positiveRatings / this.totalRatings) * 100);
+  return percentage;
 };
 
-// Controlla se l'utente è un venditore affidabile
+/**
+ * Controlla se l'utente è un venditore affidabile
+ * @returns {Boolean} true se il venditore è affidabile
+ */
 userSchema.methods.isTrustedSeller = function() {
   const percentage = this.getPositivePercentage();
-  return percentage !== null && percentage >= 90;
+  // Venditore affidabile se ha almeno 90% di feedback positivi e almeno 5 recensioni
+  return percentage !== null && percentage >= 90 && this.totalRatings >= 5;
 };
 
 // Crea il modello User
