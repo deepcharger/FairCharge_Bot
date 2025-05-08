@@ -9,33 +9,51 @@ const logger = require('./logger');
  * @returns {String} Testo formattato dell'annuncio
  */
 const formatSellAnnouncement = (announcement, user) => {
+  // Calcola la percentuale di feedback positivi dell'utente
   let positivePercentage = user.getPositivePercentage();
-  let feedbackText = positivePercentage ? 
-    `(${positivePercentage}.0% positivi)` :
-    '(Nuovo venditore)';
   
+  // Testo per il feedback
+  let feedbackText;
+  if (positivePercentage === null) {
+    feedbackText = '(Nuovo venditore)';
+  } else if (user.totalRatings <= 0) {
+    feedbackText = '(Nuovo venditore)';
+  } else {
+    feedbackText = `(${positivePercentage}% positivi, ${user.totalRatings} recensioni)`;
+  }
+  
+  // Badge venditore affidabile
   let trustedBadgeEmoji = '';
   let trustedBadgeText = '';
-  if (positivePercentage && positivePercentage >= 90) {
+  if (positivePercentage !== null && positivePercentage >= 90 && user.totalRatings >= 5) {
     trustedBadgeEmoji = '🏆 🛡️';
     trustedBadgeText = 'VENDITORE AFFIDABILE';
   }
 
-  const announcementId = announcement._id ? announcement._id.toString() : 'N/A';
+  // Formattazione ID annuncio più leggibile
+  let displayId = announcement._id;
+  // Se l'ID è nel formato personalizzato userId_yyyy-MM-dd_HH-mm
+  if (typeof announcement._id === 'string' && announcement._id.includes('_')) {
+    // Estrai solo la parte della data/ora
+    const idParts = announcement._id.split('_');
+    if (idParts.length >= 2) {
+      displayId = idParts.slice(1).join('_');
+    }
+  }
 
   return `
-*Vendita kWh sharing*
-🆔 *ID annuncio:* ${announcementId}
+${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n` : ''}*Vendita kWh sharing*
+🆔 *ID annuncio:* ${displayId}
 👤 *Venditore:* @${user.username || user.firstName}
-${trustedBadgeEmoji} *${trustedBadgeText}* ${feedbackText}
+${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}\n` : feedbackText}
 
 💲 *Prezzo:* ${announcement.price}
 ⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
 ✅ *Reti attivabili:* ${announcement.brand}
-🕒 *Disponibilità:* ${announcement.additionalInfo ? announcement.additionalInfo : 'Non specificata'}
 🗺️ *Zone:* ${announcement.location}
 ${announcement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${announcement.nonActivatableBrands}\n` : ''}
-💰 *Pagamento:* PayPal, bonifico, contanti (da specificare)
+🕒 *Disponibilità:* ${announcement.additionalInfo.includes('Disponibilità:') ? announcement.additionalInfo.split('Disponibilità:')[1].split('\n')[0].trim() : 'Non specificata'}
+💰 *Pagamento:* ${announcement.additionalInfo.includes('Metodi di pagamento:') ? announcement.additionalInfo.split('Metodi di pagamento:')[1].split('\n')[0].trim() : 'PayPal, bonifico, contanti (da specificare)'}
 📋 *Condizioni:* Non specificate
 
 📝 Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione.
@@ -160,6 +178,7 @@ Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elet
 /vendi\_kwh - Crea un annuncio per vendere kWh
 /le\_mie\_ricariche - Visualizza le tue ricariche attive
 /profilo - Visualizza il tuo profilo
+/archivia\_annuncio - Archivia il tuo annuncio attivo
 /help - Mostra questo messaggio di aiuto
 
 Se hai domande, contatta @admin\_username.
