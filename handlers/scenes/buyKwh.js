@@ -36,8 +36,8 @@ const buyKwhScene = new Scenes.WizardScene(
       ctx.wizard.state.seller = seller;
       
       // Mostra l'annuncio
-      await ctx.reply(`*Hai selezionato il seguente annuncio:*\n\n${formatSellAnnouncement(announcement, seller)}`, {
-        parse_mode: 'Markdown',
+      await ctx.reply(`<b>Hai selezionato il seguente annuncio:</b>\n\n${formatSellAnnouncement(announcement, seller)}`, {
+        parse_mode: 'HTML',
         reply_markup: Markup.inlineKeyboard([
           [
             Markup.button.callback('✅ Accetto le condizioni', 'accept_conditions'),
@@ -177,20 +177,20 @@ const buyKwhScene = new Scenes.WizardScene(
       
       // Prepara l'anteprima dell'offerta
       const previewText = `
-🔋 *Richiesta di ricarica* 🔋
+🔋 <b>Richiesta di ricarica</b> 🔋
 
-📅 *Data:* ${ctx.wizard.state.date}
-🕙 *Ora:* ${ctx.wizard.state.time}
-🏭 *Colonnina:* ${ctx.wizard.state.brand}
-📍 *Posizione:* ${ctx.wizard.state.coordinates}
-${ctx.wizard.state.additionalInfo ? `ℹ️ *Info aggiuntive:* ${ctx.wizard.state.additionalInfo}\n` : ''}
+📅 <b>Data:</b> ${ctx.wizard.state.date}
+🕙 <b>Ora:</b> ${ctx.wizard.state.time}
+🏭 <b>Colonnina:</b> ${ctx.wizard.state.brand}
+📍 <b>Posizione:</b> ${ctx.wizard.state.coordinates}
+${ctx.wizard.state.additionalInfo ? `ℹ️ <b>Info aggiuntive:</b> ${ctx.wizard.state.additionalInfo}\n` : ''}
 
-💰 *Prezzo venditore:* ${ctx.wizard.state.announcement.price}
-👤 *Venditore:* ${ctx.wizard.state.seller.username ? '@' + ctx.wizard.state.seller.username : ctx.wizard.state.seller.firstName}
+💰 <b>Prezzo venditore:</b> ${ctx.wizard.state.announcement.price}
+👤 <b>Venditore:</b> ${ctx.wizard.state.seller.username ? '@' + ctx.wizard.state.seller.username : ctx.wizard.state.seller.firstName}
 `;
       
-      await ctx.reply(`*Anteprima della tua richiesta:*\n\n${previewText}`, {
-        parse_mode: 'Markdown',
+      await ctx.reply(`<b>Anteprima della tua richiesta:</b>\n\n${previewText}`, {
+        parse_mode: 'HTML',
         reply_markup: Markup.inlineKeyboard([
           [
             Markup.button.callback('✅ Conferma e invia', 'send_request'),
@@ -281,7 +281,7 @@ buyKwhScene.command('annulla', async (ctx) => {
 buyKwhScene.command('help', async (ctx) => {
   logger.info(`Comando /help ricevuto da ${ctx.from.id} nel wizard di acquisto`);
   await ctx.reply(`
-*Guida all'acquisto di kWh*
+<b>Guida all'acquisto di kWh</b>
 
 Stai acquistando kWh da un venditore. I passaggi sono:
 1. Conferma dell'annuncio: accetta le condizioni dell'annuncio
@@ -294,7 +294,7 @@ Stai acquistando kWh da un venditore. I passaggi sono:
 
 Per annullare in qualsiasi momento, usa il comando /annulla o premi il pulsante "❌ Annulla".
 `, {
-    parse_mode: 'Markdown'
+    parse_mode: 'HTML'
   });
 });
 
