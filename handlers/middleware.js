@@ -4,8 +4,11 @@ const { SELL_GROUPS_CONFIG, BUY_GROUPS_CONFIG } = require('../config/bot');
 const userService = require('../services/userService');
 const offerService = require('../services/offerService');
 const paymentService = require('../services/paymentService');
+const commands = require('../handlers/commands');
 const Offer = require('../models/offer');
 const User = require('../models/user');
+const moment = require('moment');
+const logger = require('../utils/logger');
 
 /**
  * Middleware per la gestione della sessione
@@ -32,8 +35,31 @@ const topicMessageHandler = async (ctx, next) => {
     }
     
     // Controlla se il thread è un topic di annunci (compra o vendi)
-    const isSellTopic = SELL_GROUPS_CONFIG.topicId === messageThreadId;
-    const isBuyTopic = BUY_GROUPS_CONFIG.topicId === messageThreadId;
+    let isSellTopic = false;
+    let isBuyTopic = false;
+    
+    // Gestione della configurazione come stringa JSON o oggetto
+    if (typeof SELL_GROUPS_CONFIG === 'string') {
+      try {
+        const config = JSON.parse(SELL_GROUPS_CONFIG);
+        isSellTopic = config.topicId === messageThreadId && config.groupId === chatId;
+      } catch (e) {
+        logger.error('Errore nel parsing di SELL_GROUPS_CONFIG:', e);
+      }
+    } else {
+      isSellTopic = SELL_GROUPS_CONFIG.topicId === messageThreadId && SELL_GROUPS_CONFIG.groupId === chatId;
+    }
+    
+    if (typeof BUY_GROUPS_CONFIG === 'string') {
+      try {
+        const config = JSON.parse(BUY_GROUPS_CONFIG);
+        isBuyTopic = config.topicId === messageThreadId && config.groupId === chatId;
+      } catch (e) {
+        logger.error('Errore nel parsing di BUY_GROUPS_CONFIG:', e);
+      }
+    } else {
+      isBuyTopic = BUY_GROUPS_CONFIG.topicId === messageThreadId && BUY_GROUPS_CONFIG.groupId === chatId;
+    }
     
     if (!isSellTopic && !isBuyTopic) {
       return next();
@@ -74,6 +100,11 @@ const topicMessageHandler = async (ctx, next) => {
  * @param {Function} next - Funzione next
  */
 const textMessageHandler = async (ctx, next) => {
+  // Gestione della conferma di cancellazione dei dati utente (solo admin)
+  if (await commands.deleteUserDataHandler(ctx)) {
+    return; // Termina l'esecuzione se l'handler ha gestito il messaggio
+  }
+  
   // Controlla se stiamo aspettando un motivo di rifiuto
   if (ctx.message.reply_to_message && ctx.session.rejectOfferId) {
     const offerId = ctx.session.rejectOfferId;
@@ -552,7 +583,7 @@ ${buyerName} ha annullato la ricarica prevista per il ${moment(offer.date).forma
       
       // Recupera gli utenti
       const seller = await User.findOne({ userId: offer.sellerId });
-      const adminId = 123456789; // Sostituisci con il tuo ID Telegram
+      const adminId = require('../config/admin').ADMIN_USER_ID;
       
       // Crea la donazione
       const donation = await paymentService.createDonation(seller.userId, adminId, kwh);
