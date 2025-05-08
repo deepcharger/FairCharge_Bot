@@ -123,11 +123,11 @@ const textMessageHandler = async (ctx, next) => {
       
       // Notifica all'acquirente
       const message = `
-❌ *Richiesta di ricarica rifiutata* ❌
+❌ <b>Richiesta di ricarica rifiutata</b> ❌
 
 Il venditore ha rifiutato la tua richiesta di ricarica per il ${moment(offer.date).format('DD/MM/YYYY')} alle ${offer.time}.
 
-*Motivo:* ${rejectionReason}
+<b>Motivo:</b> ${rejectionReason}
 
 Puoi cercare un altro venditore o riprovare più tardi.
 `;
@@ -165,7 +165,7 @@ Puoi cercare un altro venditore o riprovare più tardi.
       
       // Notifica al venditore
       const message = `
-🔌 *Informazioni connettore* 🔌
+🔌 <b>Informazioni connettore</b> 🔌
 
 L'acquirente utilizzerà il connettore: ${connectorInfo}
 
@@ -211,7 +211,7 @@ Puoi ora avviare la ricarica dalla tua app.
         'Acquirente';
       
       const message = `
-⚠️ *Problema con la ricarica* ⚠️
+⚠️ <b>Problema con la ricarica</b> ⚠️
 
 ${buyerName} ha riscontrato un problema con la ricarica:
 
@@ -288,7 +288,7 @@ Per favore, contattalo direttamente per risolvere il problema.
       
       // Notifica all'acquirente
       const message = `
-⚠️ *Contestazione kWh* ⚠️
+⚠️ <b>Contestazione kWh</b> ⚠️
 
 Il venditore ha contestato i kWh dichiarati:
 
@@ -380,11 +380,11 @@ Per favore, verifica e rispondi usando il comando /le_mie_ricariche.
         'Acquirente';
       
       const message = `
-💸 *Pagamento effettuato* 💸
+💸 <b>Pagamento effettuato</b> 💸
 
 ${buyerName} dichiara di aver effettuato il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
 
-*Dettagli pagamento:* 
+<b>Dettagli pagamento:</b> 
 ${paymentDetails}
 
 Per favore, verifica di aver ricevuto il pagamento e conferma.
@@ -430,7 +430,7 @@ Per favore, verifica di aver ricevuto il pagamento e conferma.
       
       // Notifica all'acquirente
       const message = `
-⚠️ *Contestazione pagamento* ⚠️
+⚠️ <b>Contestazione pagamento</b> ⚠️
 
 Il venditore non ha ricevuto il pagamento o ha riscontrato un problema:
 
@@ -490,7 +490,7 @@ Per favore, verifica e contatta direttamente il venditore per risolvere il probl
       const feedbackText = feedbackRating ? '👍 positivo' : '👎 negativo';
       
       const message = `
-⭐ *Nuovo feedback ricevuto* ⭐
+⭐ <b>Nuovo feedback ricevuto</b> ⭐
 
 ${feedbackFrom} ti ha lasciato un feedback ${feedbackText}${comment ? `:
 
@@ -539,11 +539,11 @@ Il tuo punteggio di feedback è ora al ${otherUser.getPositivePercentage()}% pos
         'Acquirente';
       
       const message = `
-❌ *Ricarica annullata* ❌
+❌ <b>Ricarica annullata</b> ❌
 
 ${buyerName} ha annullato la ricarica prevista per il ${moment(offer.date).format('DD/MM/YYYY')} alle ${offer.time}.
 
-*Motivo:* ${cancelReason}
+<b>Motivo:</b> ${cancelReason}
 `;
       
       await offerService.notifyUserAboutOfferUpdate(offer, offer.sellerId, message);
@@ -728,19 +728,19 @@ ${buyerName} ha annullato la ricarica prevista per il ${moment(offer.date).forma
       
       // Prepara l'anteprima della richiesta
       const previewText = `
-🔋 *Richiesta di ricarica* 🔋
+🔋 <b>Richiesta di ricarica</b> 🔋
 
-📅 *Data:* ${ctx.session.manualChargeDate}
-🕙 *Ora:* ${ctx.session.manualChargeTime}
-🏭 *Colonnina:* ${ctx.session.manualChargeBrand}
-📍 *Posizione:* ${ctx.session.manualChargeCoordinates}
-${ctx.session.manualChargeInfo ? `ℹ️ *Info aggiuntive:* ${ctx.session.manualChargeInfo}\n` : ''}
+📅 <b>Data:</b> ${ctx.session.manualChargeDate}
+🕙 <b>Ora:</b> ${ctx.session.manualChargeTime}
+🏭 <b>Colonnina:</b> ${ctx.session.manualChargeBrand}
+📍 <b>Posizione:</b> ${ctx.session.manualChargeCoordinates}
+${ctx.session.manualChargeInfo ? `ℹ️ <b>Info aggiuntive:</b> ${ctx.session.manualChargeInfo}\n` : ''}
 
-👤 *Venditore:* ${seller.username ? '@' + seller.username : seller.firstName}
+👤 <b>Venditore:</b> ${seller.username ? '@' + seller.username : seller.firstName}
 `;
       
-      await ctx.reply(`*Anteprima della tua richiesta:*\n\n${previewText}`, {
-        parse_mode: 'Markdown',
+      await ctx.reply(`<b>Anteprima della tua richiesta:</b>\n\n${previewText}`, {
+        parse_mode: 'HTML',
         reply_markup: Markup.inlineKeyboard([
           [
             Markup.button.callback('✅ Conferma e invia', 'send_manual_request'),
@@ -797,9 +797,9 @@ const photoMessageHandler = async (ctx) => {
       
       // Invia la foto e i dettagli al venditore
       const message = `
-🔋 *Ricarica completata* 🔋
+🔋 <b>Ricarica completata</b> 🔋
 
-${buyerName} ha terminato la ricarica e dichiara di aver caricato *${offer.kwhCharged} kWh*.
+${buyerName} ha terminato la ricarica e dichiara di aver caricato <b>${offer.kwhCharged} kWh</b>.
 
 Controlla la foto del display e conferma o contesta i kWh dichiarati.
 `;
@@ -814,7 +814,7 @@ Controlla la foto del display e conferma o contesta i kWh dichiarati.
       // Invia la foto con il messaggio
       await ctx.telegram.sendPhoto(offer.sellerId, photoId, {
         caption: message,
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: keyboard
       });
       
