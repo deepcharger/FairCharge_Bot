@@ -3,7 +3,6 @@ const Announcement = require('../models/announcement');
 const User = require('../models/user');
 const { formatSellAnnouncement } = require('../utils/formatters');
 const logger = require('../utils/logger');
-const { Markup } = require('telegraf');
 
 // Evitare dipendenze circolari importando il bot on-demand
 let botModule = null;
@@ -100,23 +99,27 @@ const publishAnnouncement = async (announcement, user) => {
       formatSellAnnouncement(announcement, user) : 
       formatBuyAnnouncement(announcement, user);
     
-    // Prepara i bottoni inline
-    const buttons = announcement.type === 'sell' ? 
-      Markup.inlineKeyboard([
-        [Markup.button.callback('🔋 Acquista kWh', `buy_kwh_${announcement._id}`)]
-      ]) : 
-      Markup.inlineKeyboard([
-        [Markup.button.callback('🔌 Vendi kWh', `sell_kwh_${announcement._id}`)]
-      ]);
+    // Prepara i bottoni inline usando il formato diretto
+    const inlineKeyboard = announcement.type === 'sell' ? 
+      {
+        inline_keyboard: [
+          [{ text: '🔋 Acquista kWh', callback_data: `buy_kwh_${announcement._id}` }]
+        ]
+      } : 
+      {
+        inline_keyboard: [
+          [{ text: '🔌 Vendi kWh', callback_data: `sell_kwh_${announcement._id}` }]
+        ]
+      };
     
     // Pubblica il messaggio specificando il message_thread_id
     const msg = await bot.telegram.sendMessage(
       groupId,  // ID del gruppo
-      messageText,
+      messageText, // Testo del messaggio
       {
         message_thread_id: topicId,  // ID del topic/thread
-        parse_mode: 'HTML',
-        reply_markup: buttons
+        parse_mode: 'Markdown', // Usa Markdown per formattazione
+        reply_markup: inlineKeyboard // Utilizzo diretto dell'oggetto keyboard
       }
     );
     
