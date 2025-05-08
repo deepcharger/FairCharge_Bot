@@ -15,22 +15,28 @@ const getCancelKeyboard = () => {
 // Crea la scena per il wizard
 const sellAnnouncementScene = new Scenes.WizardScene(
   'SELL_ANNOUNCEMENT_WIZARD',
-  // Passo 1: Prezzo
+  // Passo 1: Prezzo - VERSIONE CORRETTA SENZA HTML
   async (ctx) => {
-    logger.info(`Avvio wizard vendita kWh per utente ${ctx.from.id}`);
-    
-    // Usa emoji e formattazione per chiarezza, correggendo eventuali tag HTML non validi
-    await ctx.reply('🔋 <b>Creazione nuovo annuncio di VENDITA</b> 🔋\n\nTi guiderò nella creazione di un annuncio completo.\nPuoi scrivere /annulla in qualsiasi momento per interrompere.', {
-      parse_mode: 'HTML'
-    });
-    
-    // Formatta gli esempi in un carattere più chiaro (usando codice inline per distinguerli)
-    await ctx.reply('Per iniziare, indicami il prezzo dei kWh che vuoi vendere.\n\nEsempi:\n- <code>0.35€ per kWh</code>\n- <code>0.28€ per ricariche > 40kW, 0.35€ per ricariche < 40kW</code>', {
-      parse_mode: 'HTML',
-      reply_markup: getCancelKeyboard()
-    });
-    
-    return ctx.wizard.next();
+    try {
+      logger.info(`Avvio wizard vendita kWh per utente ${ctx.from.id}`);
+      
+      // Primo messaggio - completamente senza formattazione HTML
+      await ctx.reply('🔋 Creazione nuovo annuncio di vendita 🔋');
+      
+      // Secondo messaggio - istruzioni generali
+      await ctx.reply('Ti guiderò nella creazione dell\'annuncio. Puoi scrivere /annulla in qualsiasi momento per interrompere.');
+      
+      // Terzo messaggio - richiesta prezzo (nessun HTML)
+      await ctx.reply('Per iniziare, indicami il prezzo dei kWh che vuoi vendere.\n\nEsempi:\n- 0.35€ per kWh\n- 0.28€ per ricariche > 40kW, 0.35€ per ricariche < 40kW', {
+        reply_markup: getCancelKeyboard()
+      });
+      
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Errore nell'inizializzazione del wizard:`, error);
+      await ctx.reply('Si è verificato un errore. Per favore, riprova più tardi.');
+      return ctx.scene.leave();
+    }
   },
   // Passo 2: Tipo corrente
   async (ctx) => {
@@ -55,20 +61,18 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       ctx.wizard.state.price = ctx.message.text;
       logger.debug(`Prezzo impostato: ${ctx.wizard.state.price}`);
       
-      // Invio opzioni per il tipo di corrente con formattazione migliorata
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: 'DC (corrente continua)', callback_data: 'current_DC' },
-            { text: 'AC (corrente alternata)', callback_data: 'current_AC' }
-          ],
-          [{ text: 'Entrambe (DC e AC)', callback_data: 'current_both' }],
-          [{ text: '❌ Annulla', callback_data: 'cancel_sell' }]
-        ]
-      };
+      // Invio opzioni per il tipo di corrente
+      const keyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('DC (corrente continua)', 'current_DC'),
+          Markup.button.callback('AC (corrente alternata)', 'current_AC')
+        ],
+        [Markup.button.callback('Entrambe (DC e AC)', 'current_both')],
+        [Markup.button.callback('❌ Annulla', 'cancel_sell')]
+      ]);
       
-      await ctx.reply('⚡ <b>Tipo di corrente disponibile</b>\n\nSpecifica quali tipi di corrente offri:', {
-        parse_mode: 'HTML',
+      // Messaggio senza HTML
+      await ctx.reply('⚡ Tipo di corrente disponibile\n\nSpecifica quali tipi di corrente offri:', {
         reply_markup: keyboard
       });
       
@@ -142,9 +146,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         return;
       }
       
-      // Procedi alla domanda sulle reti attivabili
-      await ctx.reply('🔌 <b>Reti attivabili</b>\n\nElenca tutte le reti/operatori che puoi attivare.\n\nEsempi:\n- <code>Tutte le colonnine</code>\n- <code>Enel X, BeCharge, Ionity, Ewiva, Neogy, etc.</code>\n\nSe vuoi, puoi copiare e incollare direttamente l\'elenco completo delle reti che attivi.', {
-        parse_mode: 'HTML',
+      // Procedi alla domanda sulle reti attivabili - SENZA HTML
+      await ctx.reply('🔌 Reti attivabili\n\nElenca tutte le reti/operatori che puoi attivare.\n\nEsempi:\n- Tutte le colonnine\n- Enel X, BeCharge, Ionity, Ewiva, Neogy, etc.\n\nSe vuoi, puoi copiare e incollare direttamente l\'elenco completo delle reti che attivi.', {
         reply_markup: getCancelKeyboard()
       });
       
@@ -180,8 +183,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       // che verrà fatta nel prossimo step
       if (!ctx.message) {
         // Chiedi le reti attivabili
-        await ctx.reply('🔌 <b>Reti attivabili</b>\n\nElenca tutte le reti/operatori che puoi attivare.\n\nEsempi:\n- <code>Tutte le colonnine</code>\n- <code>Enel X, BeCharge, Ionity, Ewiva, Neogy, etc.</code>\n\nSe vuoi, puoi copiare e incollare direttamente l\'elenco completo delle reti che attivi.', {
-          parse_mode: 'HTML',
+        await ctx.reply('🔌 Reti attivabili\n\nElenca tutte le reti/operatori che puoi attivare.\n\nEsempi:\n- Tutte le colonnine\n- Enel X, BeCharge, Ionity, Ewiva, Neogy, etc.\n\nSe vuoi, puoi copiare e incollare direttamente l\'elenco completo delle reti che attivi.', {
           reply_markup: getCancelKeyboard()
         });
       } else {
@@ -189,9 +191,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         ctx.wizard.state.brand = ctx.message.text;
         logger.debug(`Reti attivabili impostate: ${ctx.wizard.state.brand}`);
         
-        // Chiedi le reti NON attivabili (opzionale)
-        await ctx.reply('🚫 <b>Reti NON attivabili</b> (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente <code>Nessuna limitazione</code>.\n\nEsempi:\n- <code>Ionity, Tesla Supercharger</code>\n- <code>Tutte le colonnine oltre 50kW</code>', {
-          parse_mode: 'HTML',
+        // Chiedi le reti NON attivabili (opzionale) - SENZA HTML
+        await ctx.reply('🚫 Reti NON attivabili (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente "Nessuna limitazione".\n\nEsempi:\n- Ionity, Tesla Supercharger\n- Tutte le colonnine oltre 50kW', {
           reply_markup: getCancelKeyboard()
         });
       }
@@ -231,9 +232,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
           ctx.wizard.state.brand = ctx.message.text;
           logger.debug(`Reti attivabili impostate: ${ctx.wizard.state.brand}`);
           
-          // Chiedi le reti NON attivabili
-          await ctx.reply('🚫 <b>Reti NON attivabili</b> (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente <code>Nessuna limitazione</code>.\n\nEsempi:\n- <code>Ionity, Tesla Supercharger</code>\n- <code>Tutte le colonnine oltre 50kW</code>', {
-            parse_mode: 'HTML',
+          // Chiedi le reti NON attivabili - SENZA HTML
+          await ctx.reply('🚫 Reti NON attivabili (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente "Nessuna limitazione".\n\nEsempi:\n- Ionity, Tesla Supercharger\n- Tutte le colonnine oltre 50kW', {
             reply_markup: getCancelKeyboard()
           });
           
@@ -246,9 +246,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         }
       }
       
-      // Chiedi la disponibilità oraria
-      await ctx.reply('🕒 <b>Disponibilità oraria</b>\n\nIndica quando sei disponibile ad attivare la ricarica:\n\nEsempi:\n- <code>Sempre disponibile (24/7)</code>\n- <code>Dalle 8 alle 22 tutti i giorni</code>\n- <code>Lun-Ven 9-19, Sab-Dom 10-18</code>', {
-        parse_mode: 'HTML',
+      // Chiedi la disponibilità oraria - SENZA HTML
+      await ctx.reply('🕒 Disponibilità oraria\n\nIndica quando sei disponibile ad attivare la ricarica:\n\nEsempi:\n- Sempre disponibile (24/7)\n- Dalle 8 alle 22 tutti i giorni\n- Lun-Ven 9-19, Sab-Dom 10-18', {
         reply_markup: getCancelKeyboard()
       });
       
@@ -283,9 +282,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       ctx.wizard.state.availability = ctx.message.text;
       logger.debug(`Disponibilità oraria impostata: ${ctx.wizard.state.availability}`);
       
-      // Chiedi le zone di copertura
-      await ctx.reply('🗺️ <b>Zone di copertura</b>\n\nIndica le zone geografiche coperte dal tuo servizio:\n\nEsempi:\n- <code>Tutta Italia</code>\n- <code>Solo Lombardia e Piemonte</code>\n- <code>Provincia di Roma</code>', {
-        parse_mode: 'HTML',
+      // Chiedi le zone di copertura - SENZA HTML
+      await ctx.reply('🗺️ Zone di copertura\n\nIndica le zone geografiche coperte dal tuo servizio:\n\nEsempi:\n- Tutta Italia\n- Solo Lombardia e Piemonte\n- Provincia di Roma', {
         reply_markup: getCancelKeyboard()
       });
       
@@ -319,9 +317,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       ctx.wizard.state.location = ctx.message.text;
       logger.debug(`Zone di copertura impostate: ${ctx.wizard.state.location}`);
       
-      // Chiedi i metodi di pagamento
-      await ctx.reply('💰 <b>Metodi di pagamento accettati</b>\n\nIndica come preferisci ricevere i pagamenti:\n\nEsempi:\n- <code>PayPal, Revolut</code>\n- <code>Solo PayPal</code>\n- <code>PayPal, bonifico istantaneo</code>', {
-        parse_mode: 'HTML',
+      // Chiedi i metodi di pagamento - SENZA HTML
+      await ctx.reply('💰 Metodi di pagamento accettati\n\nIndica come preferisci ricevere i pagamenti:\n\nEsempi:\n- PayPal, Revolut\n- Solo PayPal\n- PayPal, bonifico istantaneo', {
         reply_markup: getCancelKeyboard()
       });
       
@@ -355,9 +352,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       ctx.wizard.state.paymentMethods = ctx.message.text;
       logger.debug(`Metodi di pagamento impostati: ${ctx.wizard.state.paymentMethods}`);
       
-      // Chiedi condizioni aggiuntive
-      await ctx.reply('📋 <b>Condizioni aggiuntive</b> (opzionale)\n\nSpecifica eventuali altre condizioni o informazioni che vuoi aggiungere al tuo annuncio:\n\nEsempi:\n- <code>Pacchetto minimo di 100kWh</code>\n- <code>Pagamento anticipato</code>\n- <code>Possibilità di ricarica autonoma</code>\n\nSe non hai altre condizioni, scrivi <code>Nessuna condizione aggiuntiva</code>.', {
-        parse_mode: 'HTML',
+      // Chiedi condizioni aggiuntive - SENZA HTML
+      await ctx.reply('📋 Condizioni aggiuntive (opzionale)\n\nSpecifica eventuali altre condizioni o informazioni che vuoi aggiungere al tuo annuncio:\n\nEsempi:\n- Pacchetto minimo di 100kWh\n- Pagamento anticipato\n- Possibilità di ricarica autonoma\n\nSe non hai altre condizioni, scrivi "Nessuna condizione aggiuntiva".', {
         reply_markup: getCancelKeyboard()
       });
       
@@ -407,45 +403,34 @@ const sellAnnouncementScene = new Scenes.WizardScene(
           paymentMethods: ctx.wizard.state.paymentMethods
         };
         
-        // Crea un'anteprima completa dell'annuncio
+        // Crea un'anteprima dell'annuncio - SENZA HTML
         const anteprima = `
-📢 <b>Anteprima del tuo annuncio di vendita</b>
+📢 Anteprima del tuo annuncio di vendita
 
-👤 <b>Venditore:</b> ${user.username ? '@' + user.username : user.firstName}
+👤 Venditore: ${user.username ? '@' + user.username : user.firstName}
 
-💰 <b>Prezzo:</b> ${announcement.price}
-⚡ <b>Tipo di corrente:</b> ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-✅ <b>Reti attivabili:</b> ${announcement.brand}
-${announcement.nonActivatableBrands ? `🚫 <b>Reti NON attivabili:</b> ${announcement.nonActivatableBrands}\n` : ''}
-🕒 <b>Disponibilità:</b> ${announcement.availability}
-🗺️ <b>Zone di copertura:</b> ${announcement.location}
-💳 <b>Metodi di pagamento:</b> ${announcement.paymentMethods}
-${announcement.additionalInfo ? `📋 <b>Condizioni aggiuntive:</b> ${announcement.additionalInfo}\n` : ''}
+💰 Prezzo: ${announcement.price}
+⚡ Tipo di corrente: ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+✅ Reti attivabili: ${announcement.brand}
+${announcement.nonActivatableBrands ? `🚫 Reti NON attivabili: ${announcement.nonActivatableBrands}\n` : ''}
+🕒 Disponibilità: ${announcement.availability}
+🗺️ Zone di copertura: ${announcement.location}
+💳 Metodi di pagamento: ${announcement.paymentMethods}
+${announcement.additionalInfo ? `📋 Condizioni aggiuntive: ${announcement.additionalInfo}\n` : ''}
 
-✅ <b>Conferma per pubblicare l'annuncio nel topic "Vendo kWh".</b>
+✅ Conferma per pubblicare l'annuncio nel topic "Vendo kWh".
 `;
         
-        // Utilizzando un metodo di costruzione più diretto dell'oggetto keyboard e inviandolo tramite ctx.telegram.sendMessage()
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: '✅ Conferma e pubblica', callback_data: 'publish_sell' },
-              { text: '❌ Annulla', callback_data: 'cancel_sell' }
-            ]
+        // Pulsanti di conferma
+        const keyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.callback('✅ Conferma e pubblica', 'publish_sell'),
+            Markup.button.callback('❌ Annulla', 'cancel_sell')
           ]
-        };
+        ]);
         
         // Mostra l'anteprima con bottoni
-        const sentMsg = await ctx.telegram.sendMessage(
-          ctx.chat.id,
-          anteprima,
-          {
-            parse_mode: 'HTML',
-            reply_markup: keyboard
-          }
-        );
-        
-        logger.debug(`Anteprima annuncio inviata, message_id: ${sentMsg.message_id}`);
+        await ctx.reply(anteprima, { reply_markup: keyboard });
         
         logger.info(`Fine passo 9 per utente ${ctx.from.id}`);
         return ctx.wizard.next();
@@ -626,7 +611,7 @@ sellAnnouncementScene.command('annulla', async (ctx) => {
 sellAnnouncementScene.command('help', async (ctx) => {
   logger.info(`Comando /help ricevuto da ${ctx.from.id} durante il wizard di vendita`);
   await ctx.reply(`
-<b>Guida alla creazione di un annuncio</b>
+Guida alla creazione di un annuncio
 
 Stai creando un annuncio per vendere kWh. I passaggi sono:
 1. Prezzo: indica quanto fai pagare per kWh
@@ -639,9 +624,7 @@ Stai creando un annuncio per vendere kWh. I passaggi sono:
 8. Condizioni aggiuntive: altre informazioni utili
 
 Per annullare in qualsiasi momento, usa il comando /annulla o premi il pulsante "❌ Annulla".
-`, {
-    parse_mode: 'HTML'
-  });
+`);
 });
 
 module.exports = sellAnnouncementScene;
