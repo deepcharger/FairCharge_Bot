@@ -135,7 +135,7 @@ const publishAnnouncement = async (announcement, user) => {
 /**
  * Archivia un annuncio esistente
  * @param {String} announcementId - ID dell'annuncio da archiviare
- * @returns {Promise<Object>} L'annuncio archiviato
+ * @returns {Promise<Object>} L'annuncio archiviato o null se non trovato
  */
 const archiveAnnouncement = async (announcementId) => {
   try {
@@ -144,7 +144,7 @@ const archiveAnnouncement = async (announcementId) => {
     const announcement = await Announcement.findById(announcementId);
     if (!announcement) {
       logger.warn(`Tentativo di archiviare un annuncio non esistente: ${announcementId}`);
-      throw new Error('Annuncio non trovato');
+      return null; // Restituisci null invece di lanciare un errore
     }
     
     // Archivia l'annuncio
@@ -189,7 +189,7 @@ const archiveAnnouncement = async (announcementId) => {
     return announcement;
   } catch (err) {
     logger.error(`Errore nell'archiviazione dell'annuncio ${announcementId}:`, err);
-    throw err;
+    return null; // Restituisci null anche in caso di errore
   }
 };
 
@@ -229,6 +229,15 @@ const updateUserActiveAnnouncement = async (userId, type, announcementId) => {
     if (!user) {
       logger.warn(`Tentativo di aggiornare annuncio per utente non esistente: ${userId}`);
       throw new Error('Utente non trovato');
+    }
+    
+    // Se stiamo impostando un ID annuncio (non null), verifichiamo che esista
+    if (announcementId) {
+      const announcementExists = await Announcement.findById(announcementId);
+      if (!announcementExists) {
+        logger.warn(`Tentativo di impostare un annuncio non esistente (${announcementId}) come attivo per l'utente ${userId}`);
+        // Non lanciamo un errore, ma logghiamo l'avviso
+      }
     }
     
     if (type === 'sell') {
