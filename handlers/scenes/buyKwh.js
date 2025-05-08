@@ -5,7 +5,7 @@ const userService = require('../../services/userService');
 const offerService = require('../../services/offerService');
 const Announcement = require('../../models/announcement');
 const User = require('../../models/user');
-const { formatSellAnnouncement, formatChargeRequest } = require('../../utils/formatters');
+const { formatSellAnnouncementSafe, formatChargeRequest } = require('../../utils/formatters');
 const logger = require('../../utils/logger');
 
 // Crea la scena per il wizard
@@ -49,8 +49,8 @@ const buyKwhScene = new Scenes.WizardScene(
       ctx.wizard.state.announcement = announcement;
       ctx.wizard.state.seller = seller;
       
-      // Mostra l'annuncio con formattazione migliorata
-      await ctx.reply(`*Hai selezionato il seguente annuncio:*\n\n${formatSellAnnouncement(announcement, seller)}`, {
+      // Mostra l'annuncio con formattazione sicura per evitare errori di parsing Markdown
+      await ctx.reply(`*Hai selezionato il seguente annuncio:*\n\n${formatSellAnnouncementSafe(announcement, seller)}`, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
