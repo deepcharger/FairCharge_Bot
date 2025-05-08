@@ -413,6 +413,9 @@ const setupBot = () => {
   botInstance.command('avvio_ricarica', commands.startChargeCommand);
   botInstance.command('update_commands', commands.updateBotCommandsCommand);
   botInstance.command('annulla', commands.cancelCommand);
+  botInstance.command('archivia_annuncio', commands.archiveAnnouncementCommand);
+  botInstance.command('cancella_dati_utente', commands.deleteUserDataCommand);
+  botInstance.command('aggiungi_feedback', commands.addFeedbackCommand);
 
   // Registra i gestori delle callback
   botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
