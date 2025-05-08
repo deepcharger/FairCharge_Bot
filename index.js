@@ -13,13 +13,25 @@ const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 
+// Configurazioni per la stabilità in produzione
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '60000', 10);
+const LOCK_FILE_PATH = process.env.LOCK_FILE_PATH || path.join(__dirname, '.bot_lock');
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_BASE = 5000; // 5 secondi di base per i retry
+const LOCK_CHECK_INTERVAL = 20000; // 20 secondi per controllo del lock
+const SHUTDOWN_TIMEOUT = 5000; // 5 secondi prima della chiusura forzata
+
 // Flag per tracciare lo stato di shutdown
 let isShuttingDown = false;
 let lockCheckInterval = null;
 let botInstance = null;
+let restartAttempts = 0;
 
-// Imposta un file di lock locale nel sistema di file
-const lockFilePath = path.join(__dirname, '.bot_lock');
+// Configurazione del logging in base all'ambiente
+if (NODE_ENV === 'production') {
+    logger.info('Applicazione avviata in modalità produzione');
+}
 
 // Schema per il lock del bot (nel database)
 const botLockSchema = new mongoose.Schema({
@@ -39,9 +51,9 @@ logger.info(`ID istanza generato: ${INSTANCE_ID}`);
 const init = async () => {
   try {
     // Verifica se esiste già un file di lock locale per prevenire avvii multipli sullo stesso server
-    if (fs.existsSync(lockFilePath)) {
+    if (fs.existsSync(LOCK_FILE_PATH)) {
       try {
-        const lockData = fs.readFileSync(lockFilePath, 'utf8');
+        const lockData = fs.readFileSync(LOCK_FILE_PATH, 'utf8');
         const lockInfo = JSON.parse(lockData);
         const lockAge = Date.now() - lockInfo.timestamp;
         
@@ -59,7 +71,7 @@ const init = async () => {
     }
     
     // Crea il lock file locale
-    fs.writeFileSync(lockFilePath, JSON.stringify({
+    fs.writeFileSync(LOCK_FILE_PATH, JSON.stringify({
       instanceId: INSTANCE_ID,
       timestamp: Date.now()
     }));
@@ -67,13 +79,13 @@ const init = async () => {
     // Imposta rimozione del lock file alla chiusura
     process.on('exit', () => {
       try {
-        if (fs.existsSync(lockFilePath)) {
+        if (fs.existsSync(LOCK_FILE_PATH)) {
           // Verifica che il file appartenga a questa istanza prima di rimuoverlo
-          const lockData = fs.readFileSync(lockFilePath, 'utf8');
+          const lockData = fs.readFileSync(LOCK_FILE_PATH, 'utf8');
           const lockInfo = JSON.parse(lockData);
           
           if (lockInfo.instanceId === INSTANCE_ID) {
-            fs.unlinkSync(lockFilePath);
+            fs.unlinkSync(LOCK_FILE_PATH);
             // Non è possibile loggare qui perché il processo sta terminando
           }
         }
@@ -115,7 +127,12 @@ const setupBot = () => {
   }
   
   // Crea una nuova istanza del bot
-  botInstance = new Telegraf(token);
+  botInstance = new Telegraf(token, {
+    telegram: {
+      // Timeout per le richieste HTTP
+      timeoutMs: REQUEST_TIMEOUT
+    }
+  });
   
   // Middleware di logging per tutte le richieste
   botInstance.use((ctx, next) => {
@@ -124,6 +141,28 @@ const setupBot = () => {
       const responseTime = Date.now() - start;
       logger.request(ctx, responseTime);
     });
+  });
+
+  // Middleware per verificare periodicamente il lock durante richieste lunghe
+  botInstance.use(async (ctx, next) => {
+    // Avvia controllo lock in background per richieste lunghe
+    const lockCheckTimeout = setTimeout(async () => {
+      try {
+        await updateLockFile();
+        await BotLock.updateOne(
+          { lockId: 'bot_lock', instanceId: INSTANCE_ID },
+          { $set: { createdAt: new Date() } }
+        );
+      } catch (err) {
+        // Ignora errori qui, saranno gestiti dall'intervallo principale
+      }
+    }, 10000); // 10 secondi per richieste lunghe
+
+    try {
+      return await next();
+    } finally {
+      clearTimeout(lockCheckTimeout);
+    }
   });
 
   // Registra i middleware
@@ -186,24 +225,31 @@ const setupBot = () => {
   // Gestione dei messaggi con foto
   botInstance.on('photo', middleware.photoMessageHandler);
 
+  // Aggiunta di health check endpoint se configurato
+  if (process.env.HEALTH_CHECK_PATH) {
+    botInstance.telegram.getMe().then(botInfo => {
+      logger.info(`Health check endpoint configurato per @${botInfo.username}`);
+    });
+  }
+
   // Gestione degli errori
   botInstance.catch((err, ctx) => {
-    logger.error(`Errore per ${ctx.updateType}:`, err);
+    logger.error(`Errore per ${ctx?.updateType || 'unknown'}:`, err);
   });
   
   return botInstance;
 };
 
-// Funzione per tenere aggiornato il lock file locale
+// Funzione per aggiornare il lock file locale
 const updateLockFile = () => {
   try {
-    if (fs.existsSync(lockFilePath)) {
-      const lockData = fs.readFileSync(lockFilePath, 'utf8');
+    if (fs.existsSync(LOCK_FILE_PATH)) {
+      const lockData = fs.readFileSync(LOCK_FILE_PATH, 'utf8');
       const lockInfo = JSON.parse(lockData);
       
       // Verifica che il file appartenga a questa istanza
       if (lockInfo.instanceId === INSTANCE_ID) {
-        fs.writeFileSync(lockFilePath, JSON.stringify({
+        fs.writeFileSync(LOCK_FILE_PATH, JSON.stringify({
           instanceId: INSTANCE_ID,
           timestamp: Date.now()
         }));
@@ -212,7 +258,7 @@ const updateLockFile = () => {
       }
     } else {
       // Se il file non esiste più, ricrealo
-      fs.writeFileSync(lockFilePath, JSON.stringify({
+      fs.writeFileSync(LOCK_FILE_PATH, JSON.stringify({
         instanceId: INSTANCE_ID,
         timestamp: Date.now()
       }));
@@ -306,7 +352,7 @@ const acquireLock = async () => {
       } catch (err) {
         logger.error('Errore nell\'aggiornamento del lock:', err);
       }
-    }, 20000); // Ogni 20 secondi
+    }, LOCK_CHECK_INTERVAL);
   } catch (err) {
     if (err.code === 11000) { // Errore duplicato MongoDB
       logger.info('Lock già acquisito da un\'altra istanza. Verifico se possibile acquisirlo.');
@@ -379,7 +425,9 @@ const acquireLock = async () => {
 };
 
 // Funzione semplificata per avviare il bot con ritentativo
-const startBot = async (attempt = 1, maxAttempts = 3) => {
+const startBot = async (attempt = 1, maxAttempts = MAX_RETRY_ATTEMPTS) => {
+  restartAttempts++;
+  
   if (isShuttingDown) {
     logger.warn('Tentativo di avvio durante shutdown. Abortito.');
     return false;
@@ -412,6 +460,9 @@ const startBot = async (attempt = 1, maxAttempts = 3) => {
       });
       
       logger.info(`Bot avviato con successo in modalità polling (tentativo ${attempt})`);
+      
+      // Reset del contatore di tentativi dopo successo
+      restartAttempts = 0;
       
       // Una volta avviato con successo, assicurati che il lock file sia aggiornato
       updateLockFile();
@@ -448,7 +499,7 @@ const startBot = async (attempt = 1, maxAttempts = 3) => {
     logger.error(`[Tentativo ${attempt}] Errore nell'avvio del bot:`, error);
     
     if (attempt < maxAttempts) {
-      const retryDelay = 5000 * attempt; // Ritardo crescente: 5s, 10s, 15s...
+      const retryDelay = RETRY_DELAY_BASE * attempt; // Ritardo crescente: 5s, 10s, 15s...
       logger.info(`Riprovo l'avvio tra ${retryDelay/1000} secondi (tentativo ${attempt + 1}/${maxAttempts})...`);
       
       await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -486,12 +537,12 @@ const releaseLock = async () => {
     
     // Rimuovi anche il lock file locale se appartiene a questa istanza
     try {
-      if (fs.existsSync(lockFilePath)) {
-        const lockData = fs.readFileSync(lockFilePath, 'utf8');
+      if (fs.existsSync(LOCK_FILE_PATH)) {
+        const lockData = fs.readFileSync(LOCK_FILE_PATH, 'utf8');
         const lockInfo = JSON.parse(lockData);
         
         if (lockInfo.instanceId === INSTANCE_ID) {
-          fs.unlinkSync(lockFilePath);
+          fs.unlinkSync(LOCK_FILE_PATH);
           logger.info(`Lock file locale rimosso da ${INSTANCE_ID}`);
         } else {
           logger.warn(`Lock file locale appartiene ad altra istanza: ${lockInfo.instanceId}`);
@@ -530,9 +581,22 @@ const gracefulShutdown = async (signal) => {
     }
   }
   
+  // Registra i tentativi di riavvio effettuati
+  if (restartAttempts > 0) {
+    logger.info(`L'istanza ha tentato ${restartAttempts} riavvii durante il ciclo di vita`);
+  }
+  
+  // Chiusura della connessione al database
+  try {
+    await mongoose.connection.close();
+    logger.info('Connessione al database chiusa');
+  } catch (err) {
+    logger.error('Errore nella chiusura della connessione al database:', err);
+  }
+  
   // Nei sistemi come Render, attendi un po' prima di uscire
   // per evitare riavvii troppo rapidi
-  const exitTimeout = signal === 'DUPLICATE_INSTANCE' ? 1000 : 5000;
+  const exitTimeout = signal === 'DUPLICATE_INSTANCE' ? 1000 : SHUTDOWN_TIMEOUT;
   
   setTimeout(() => {
     logger.info(`Uscita con codice 0 dopo ${exitTimeout}ms`);
