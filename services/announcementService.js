@@ -1,7 +1,7 @@
 // Servizio per la gestione degli annunci
 const Announcement = require('../models/announcement');
 const User = require('../models/user');
-const { formatSellAnnouncementSafe } = require('../utils/formatters');
+const { formatSellAnnouncementSafe, formatBuyAnnouncement } = require('../utils/formatters');
 const logger = require('../utils/logger');
 
 // Evitare dipendenze circolari importando il bot on-demand
@@ -94,55 +94,44 @@ const publishAnnouncement = async (announcement, user) => {
     
     logger.info(`Pubblicazione annuncio ${announcement._id} nel gruppo ${groupId}, topic ${topicId}`);
     
-    // STRATEGIA: Dividi la pubblicazione in due messaggi
-    // 1) Pubblicazione solo del testo senza il bottone
-    // 2) Messaggio con il bottone in risposta al primo messaggio
-    
     try {
-      // 1. Prima invia solo il testo dell'annuncio - usiamo una versione sicura
-      const messageText = formatSellAnnouncementSafe(announcement, user);
+      // Prepara il testo dell'annuncio 
+      const messageText = announcement.type === 'sell' ? 
+        formatSellAnnouncementSafe(announcement, user) : 
+        formatBuyAnnouncement(announcement, user);
       
-      // Invia il messaggio principale senza bottoni
-      const mainMessage = await bot.telegram.sendMessage(
-        groupId,
-        messageText,
-        {
-          message_thread_id: topicId,
-          parse_mode: 'Markdown' // Usiamo ancora Markdown, ma con testo sicuro
-        }
-      );
-      
-      // 2. Ora invia un messaggio separato con il bottone
+      // Prepara il bottone inline con testo migliorato
+      // Per annunci di vendita, mostra "Prenota ricarica a questo prezzo"
       const buttonText = announcement.type === 'sell' ? 
-        '🔋 Acquista kWh' : 
-        '🔌 Vendi kWh';
+        `🔋 Prenota ricarica a questo prezzo` : 
+        '🔌 Offri ricarica a questo acquirente';
       
       const callbackData = announcement.type === 'sell' ? 
         `buy_kwh_${announcement._id}` : 
         `sell_kwh_${announcement._id}`;
       
-      // Invia un messaggio con bottone che fa riferimento al messaggio principale
-      await bot.telegram.sendMessage(
+      const inlineKeyboard = {
+        inline_keyboard: [
+          [{ text: buttonText, callback_data: callbackData }]
+        ]
+      };
+      
+      // Invia un messaggio UNICO con testo e bottone insieme
+      const sentMessage = await bot.telegram.sendMessage(
         groupId,
-        announcement.type === 'sell' ? 
-          'Clicca qui per acquistare kWh da questo venditore:' : 
-          'Clicca qui per vendere kWh a questo acquirente:',
+        messageText,
         {
           message_thread_id: topicId,
-          reply_to_message_id: mainMessage.message_id,
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: buttonText, callback_data: callbackData }]
-            ]
-          }
+          parse_mode: 'Markdown',
+          reply_markup: inlineKeyboard  // Aggiungi il bottone direttamente al messaggio principale
         }
       );
       
-      // Salva l'ID del messaggio principale
-      announcement.messageId = mainMessage.message_id;
+      // Salva l'ID del messaggio 
+      announcement.messageId = sentMessage.message_id;
       await announcement.save();
       
-      logger.debug(`Annuncio pubblicato con messageId: ${mainMessage.message_id}`);
+      logger.debug(`Annuncio pubblicato con messageId: ${sentMessage.message_id}`);
       return announcement;
       
     } catch (error) {
