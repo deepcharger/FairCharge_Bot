@@ -83,26 +83,26 @@ const notifySellerAboutOffer = async (offer, buyer, announcement = null) => {
     
     // Prepara il testo della notifica
     let offerText = `
-🔋 *Nuova richiesta di ricarica* 🔋
+🔋 <b>Nuova richiesta di ricarica</b> 🔋
 
-👤 *Da:* ${buyer.username ? '@' + buyer.username : buyer.firstName}
-📅 *Data:* ${moment(offer.date).format('DD/MM/YYYY')}
-🕙 *Ora:* ${offer.time}
-🏭 *Colonnina:* ${offer.brand}
-📍 *Posizione:* ${offer.coordinates}
-${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` : ''}
+👤 <b>Da:</b> ${buyer.username ? '@' + buyer.username : buyer.firstName}
+📅 <b>Data:</b> ${moment(offer.date).format('DD/MM/YYYY')}
+🕙 <b>Ora:</b> ${offer.time}
+🏭 <b>Colonnina:</b> ${offer.brand}
+📍 <b>Posizione:</b> ${offer.coordinates}
+${offer.additionalInfo ? `ℹ️ <b>Info aggiuntive:</b> ${offer.additionalInfo}\n` : ''}
 `;
 
     // Aggiungi dettagli sull'annuncio se disponibile
     if (announcement) {
-      offerText += `\n💰 *Prezzo tuo annuncio:* ${announcement.price}`;
+      offerText += `\n💰 <b>Prezzo tuo annuncio:</b> ${announcement.price}`;
     } else {
-      offerText += '\n💰 *Nota:* Questa richiesta utilizza il saldo donato da te o da altri venditori.';
+      offerText += '\n💰 <b>Nota:</b> Questa richiesta utilizza il saldo donato da te o da altri venditori.';
     }
     
     // Invia la notifica al venditore
     await bot.telegram.sendMessage(offer.sellerId, offerText, {
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
       reply_markup: Markup.inlineKeyboard([
         [
           Markup.button.callback('✅ Accetta', `accept_offer_${offer._id}`),
@@ -230,7 +230,7 @@ const notifyUserAboutOfferUpdate = async (offer, targetUserId, message, keyboard
     });
     
     const options = {
-      parse_mode: 'Markdown'
+      parse_mode: 'HTML'
     };
     
     if (keyboard) {
