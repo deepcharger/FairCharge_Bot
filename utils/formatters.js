@@ -3,6 +3,17 @@ const User = require('../models/user');
 const logger = require('./logger');
 
 /**
+ * Funzione per "sanificare" il testo in Markdown
+ * @param {String} text - Testo da sanificare
+ * @returns {String} Testo sanificato
+ */
+const sanitizeMarkdown = (text) => {
+  if (!text) return '';
+  // Escape dei caratteri speciali di Markdown
+  return text.replace(/([_*\[\]()~`>#+=|{}.!-])/g, '\\$1');
+};
+
+/**
  * Formatta un annuncio di vendita
  * @param {Object} announcement - L'annuncio da formattare
  * @param {Object} user - L'utente proprietario dell'annuncio
@@ -41,23 +52,67 @@ const formatSellAnnouncement = (announcement, user) => {
     }
   }
 
-  return `
-${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n` : ''}*Vendita kWh sharing*
+  // Sanifichiamo i valori di input per evitare problemi di formattazione Markdown
+  const sanitizedBrand = sanitizeMarkdown(announcement.brand);
+  const sanitizedLocation = sanitizeMarkdown(announcement.location);
+  const sanitizedNonActivatableBrands = sanitizeMarkdown(announcement.nonActivatableBrands);
+  
+  // Estrazione info di disponibilità e pagamento dall'additionalInfo
+  let availabilityInfo = 'Non specificata';
+  let paymentInfo = 'PayPal, bonifico, contanti (da specificare)';
+  let otherInfo = '';
+  
+  if (announcement.additionalInfo) {
+    const sanitizedAdditionalInfo = sanitizeMarkdown(announcement.additionalInfo);
+    
+    // Estrai la disponibilità
+    if (sanitizedAdditionalInfo.includes('Disponibilità:')) {
+      const availabilityLine = sanitizedAdditionalInfo
+        .split('Disponibilità:')[1]
+        .split('\n')[0]
+        .trim();
+      if (availabilityLine) {
+        availabilityInfo = availabilityLine;
+      }
+    }
+    
+    // Estrai i metodi di pagamento
+    if (sanitizedAdditionalInfo.includes('Metodi di pagamento:')) {
+      const paymentLine = sanitizedAdditionalInfo
+        .split('Metodi di pagamento:')[1]
+        .split('\n')[0]
+        .trim();
+      if (paymentLine) {
+        paymentInfo = paymentLine;
+      }
+    }
+    
+    // Altre info (escludi disponibilità e pagamento)
+    const lines = sanitizedAdditionalInfo.split('\n');
+    const otherLines = lines.filter(line => 
+      !line.includes('Disponibilità:') && 
+      !line.includes('Metodi di pagamento:')
+    );
+    
+    if (otherLines.length > 0) {
+      otherInfo = otherLines.join('\n');
+    }
+  }
+
+  return `${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n\n` : ''}*Vendita kWh sharing*
+
 🆔 *ID annuncio:* ${displayId}
 👤 *Venditore:* @${user.username || user.firstName}
-${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}\n` : `⭐ ${feedbackText}\n`}
+${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
 
 💲 *Prezzo:* ${announcement.price}
 ⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-✅ *Reti attivabili:* ${announcement.brand}
-🗺️ *Zone:* ${announcement.location}
-${announcement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${announcement.nonActivatableBrands}\n` : ''}
-🕒 *Disponibilità:* ${announcement.additionalInfo.includes('Disponibilità:') ? announcement.additionalInfo.split('Disponibilità:')[1].split('\n')[0].trim() : 'Non specificata'}
-💰 *Pagamento:* ${announcement.additionalInfo.includes('Metodi di pagamento:') ? announcement.additionalInfo.split('Metodi di pagamento:')[1].split('\n')[0].trim() : 'PayPal, bonifico, contanti (da specificare)'}
-${announcement.additionalInfo && !announcement.additionalInfo.includes('Disponibilità:') && !announcement.additionalInfo.includes('Metodi di pagamento:') ? `📋 *Condizioni:* ${announcement.additionalInfo}` : '📋 *Condizioni:* Non specificate'}
-
-📝 _Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione._
-`;
+✅ *Reti attivabili:* ${sanitizedBrand}
+🗺️ *Zone:* ${sanitizedLocation}
+${announcement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${sanitizedNonActivatableBrands}\n` : ''}🕒 *Disponibilità:* ${availabilityInfo}
+💰 *Pagamento:* ${paymentInfo}
+${otherInfo ? `📋 *Condizioni:* ${otherInfo}\n` : '📋 *Condizioni:* Non specificate\n'}
+📝 _Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione._`;
 };
 
 /**
@@ -67,14 +122,18 @@ ${announcement.additionalInfo && !announcement.additionalInfo.includes('Disponib
  * @returns {String} Testo formattato della richiesta
  */
 const formatChargeRequest = (offer, seller) => {
+  const sanitizedBrand = sanitizeMarkdown(offer.brand);
+  const sanitizedCoordinates = sanitizeMarkdown(offer.coordinates);
+  const sanitizedAdditionalInfo = offer.additionalInfo ? sanitizeMarkdown(offer.additionalInfo) : '';
+
   return `
 🔋 *Richiesta di ricarica* 🔋
 
 📅 *Data:* ${offer.date}
 🕙 *Ora:* ${offer.time}
-🏭 *Colonnina:* ${offer.brand}
-📍 *Posizione:* ${offer.coordinates}
-${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` : ''}
+🏭 *Colonnina:* ${sanitizedBrand}
+📍 *Posizione:* ${sanitizedCoordinates}
+${sanitizedAdditionalInfo ? `ℹ️ *Info aggiuntive:* ${sanitizedAdditionalInfo}\n` : ''}
 
 💰 *Prezzo venditore:* ${seller.announcement ? seller.announcement.price : 'Non specificato'}
 👤 *Venditore:* ${seller.username ? '@' + seller.username : seller.firstName}
@@ -126,14 +185,14 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
     activeAnnouncementsText += '\n\n*Annuncio di vendita attivo:*\n';
     activeAnnouncementsText += `• *Prezzo:* ${sellAnnouncement.price}\n`;
     activeAnnouncementsText += `• *Corrente:* ${sellAnnouncement.connectorType === 'both' ? 'AC e DC' : sellAnnouncement.connectorType}\n`;
-    activeAnnouncementsText += `• *Località:* ${sellAnnouncement.location}\n`;
+    activeAnnouncementsText += `• *Località:* ${sanitizeMarkdown(sellAnnouncement.location)}\n`;
   }
   
   if (buyAnnouncement && buyAnnouncement.status === 'active') {
     activeAnnouncementsText += '\n\n*Annuncio di acquisto attivo:*\n';
     activeAnnouncementsText += `• *Prezzo massimo:* ${buyAnnouncement.price}\n`;
     activeAnnouncementsText += `• *Corrente:* ${buyAnnouncement.connectorType === 'both' ? 'AC e DC' : buyAnnouncement.connectorType}\n`;
-    activeAnnouncementsText += `• *Località:* ${buyAnnouncement.location}\n`;
+    activeAnnouncementsText += `• *Località:* ${sanitizeMarkdown(buyAnnouncement.location)}\n`;
   }
   
   // Formatta le transazioni recenti
@@ -151,11 +210,15 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
     }
   }
   
+  // Sanifichiamo nome e cognome per evitare problemi di formattazione
+  const firstName = sanitizeMarkdown(user.firstName || '');
+  const lastName = user.lastName ? sanitizeMarkdown(user.lastName) : '';
+  
   // Costruisci il profilo completo
   return `
 👤 *Il tuo profilo*
 
-*Nome:* ${user.firstName || ''}${user.lastName ? ' ' + user.lastName : ''}
+*Nome:* ${firstName}${lastName ? ' ' + lastName : ''}
 *Username:* ${user.username ? '@' + user.username : 'Non impostato'}
 *Iscritto dal:* ${user.registrationDate.toLocaleDateString('it-IT')}
 *Feedback:* ${feedbackText}
@@ -174,13 +237,13 @@ const formatWelcomeMessage = () => {
 Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
 
 🔌 *Comandi disponibili:*
-• /vendi_kwh - Crea un annuncio per vendere kWh
-• /le_mie_ricariche - Visualizza le tue ricariche attive
+• /vendi\\_kwh - Crea un annuncio per vendere kWh
+• /le\\_mie\\_ricariche - Visualizza le tue ricariche attive
 • /profilo - Visualizza il tuo profilo
-• /archivia_annuncio - Archivia il tuo annuncio attivo
+• /archivia\\_annuncio - Archivia il tuo annuncio attivo
 • /help - Mostra questo messaggio di aiuto
 
-Se hai domande, contatta @admin_username.
+Se hai domande, contatta @admin\\_username.
 `;
 };
 
@@ -189,5 +252,6 @@ module.exports = {
   formatChargeRequest,
   formatOfferListItem,
   formatUserProfile,
-  formatWelcomeMessage
+  formatWelcomeMessage,
+  sanitizeMarkdown
 };
