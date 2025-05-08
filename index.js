@@ -10,13 +10,18 @@ const { sceneCleanerMiddleware, setupPeriodicCleaner } = require('./utils/sceneC
 const mongoose = require('mongoose');
 const { Telegraf } = require('telegraf');
 const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
 
 // Flag per tracciare lo stato di shutdown
 let isShuttingDown = false;
 let lockCheckInterval = null;
 let botInstance = null;
 
-// Schema per il lock del bot
+// Imposta un file di lock locale nel sistema di file
+const lockFilePath = path.join(__dirname, '.bot_lock');
+
+// Schema per il lock del bot (nel database)
 const botLockSchema = new mongoose.Schema({
   lockId: { type: String, required: true, unique: true },
   instanceId: { type: String, required: true },
@@ -33,6 +38,50 @@ logger.info(`ID istanza generato: ${INSTANCE_ID}`);
 // Connessione al database e inizializzazione
 const init = async () => {
   try {
+    // Verifica se esiste già un file di lock locale per prevenire avvii multipli sullo stesso server
+    if (fs.existsSync(lockFilePath)) {
+      try {
+        const lockData = fs.readFileSync(lockFilePath, 'utf8');
+        const lockInfo = JSON.parse(lockData);
+        const lockAge = Date.now() - lockInfo.timestamp;
+        
+        if (lockAge < 60000) { // Il lock è recente (meno di 1 minuto)
+          logger.warn(`Lock file locale trovato (${lockInfo.instanceId}) con età ${Math.round(lockAge/1000)}s. Terminazione.`);
+          process.exit(0); // Esci senza errore per evitare che Render riavvii immediatamente
+        } else {
+          logger.warn(`Lock file locale trovato ma vecchio (${Math.round(lockAge/1000)}s). Sovrascrittura.`);
+          // Continua e sovrascrive il lock vecchio
+        }
+      } catch (lockErr) {
+        logger.error('Errore nella lettura del lock file:', lockErr);
+        // Lock file corrotto, continua
+      }
+    }
+    
+    // Crea il lock file locale
+    fs.writeFileSync(lockFilePath, JSON.stringify({
+      instanceId: INSTANCE_ID,
+      timestamp: Date.now()
+    }));
+    
+    // Imposta rimozione del lock file alla chiusura
+    process.on('exit', () => {
+      try {
+        if (fs.existsSync(lockFilePath)) {
+          // Verifica che il file appartenga a questa istanza prima di rimuoverlo
+          const lockData = fs.readFileSync(lockFilePath, 'utf8');
+          const lockInfo = JSON.parse(lockData);
+          
+          if (lockInfo.instanceId === INSTANCE_ID) {
+            fs.unlinkSync(lockFilePath);
+            // Non è possibile loggare qui perché il processo sta terminando
+          }
+        }
+      } catch (e) {
+        // Non possiamo fare molto durante l'exit
+      }
+    });
+    
     // Connetti al database
     await connectToDatabase();
     logger.info('Connesso al database MongoDB');
@@ -40,8 +89,10 @@ const init = async () => {
     // Assicurati che l'indice TTL sia impostato
     await BotLock.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 });
     
-    // Tenta di acquisire il lock per avviare il bot
-    await acquireLock();
+    // Avvia il bot dopo un breve ritardo per evitare conflitti con avvii multipli
+    setTimeout(async () => {
+      await acquireLock();
+    }, 2000);
   } catch (err) {
     logger.error('Errore di inizializzazione:', err);
     process.exit(1);
@@ -143,16 +194,46 @@ const setupBot = () => {
   return botInstance;
 };
 
+// Funzione per tenere aggiornato il lock file locale
+const updateLockFile = () => {
+  try {
+    if (fs.existsSync(lockFilePath)) {
+      const lockData = fs.readFileSync(lockFilePath, 'utf8');
+      const lockInfo = JSON.parse(lockData);
+      
+      // Verifica che il file appartenga a questa istanza
+      if (lockInfo.instanceId === INSTANCE_ID) {
+        fs.writeFileSync(lockFilePath, JSON.stringify({
+          instanceId: INSTANCE_ID,
+          timestamp: Date.now()
+        }));
+      } else {
+        logger.warn(`Lock file appartiene ad altra istanza: ${lockInfo.instanceId}`);
+      }
+    } else {
+      // Se il file non esiste più, ricrealo
+      fs.writeFileSync(lockFilePath, JSON.stringify({
+        instanceId: INSTANCE_ID,
+        timestamp: Date.now()
+      }));
+    }
+  } catch (err) {
+    logger.error('Errore nell\'aggiornamento del lock file:', err);
+  }
+};
+
 // Funzione per acquisire il lock nel database
 const acquireLock = async () => {
   try {
-    // Prima verifichiamo se stiamo già in fase di chiusura
     if (isShuttingDown) {
       logger.warn('Tentativo di acquisire lock durante fase di chiusura. Abortito.');
       return;
     }
     
-    // Creiamo un documento di lock
+    // Aggiorna il lock file locale
+    updateLockFile();
+    
+    // Creiamo un documento di lock nel database
     await BotLock.create({
       lockId: 'bot_lock',
       instanceId: INSTANCE_ID
@@ -163,8 +244,10 @@ const acquireLock = async () => {
     // Configura una nuova istanza del bot
     setupBot();
     
-    // Avvia il bot
-    await startBot();
+    // Avvia il bot con ritardo progressivo (1 secondo)
+    setTimeout(async () => {
+      await startBot();
+    }, 1000);
     
     // Imposta un timer per aggiornare periodicamente il lock
     if (lockCheckInterval) {
@@ -173,7 +256,6 @@ const acquireLock = async () => {
     
     lockCheckInterval = setInterval(async () => {
       if (isShuttingDown) {
-        // Se siamo in fase di chiusura, ferma l'intervallo
         if (lockCheckInterval) {
           clearInterval(lockCheckInterval);
           lockCheckInterval = null;
@@ -182,88 +264,74 @@ const acquireLock = async () => {
       }
       
       try {
+        // Aggiorna il lock file locale
+        updateLockFile();
+        
         // Aggiorna il timestamp del documento lock per evitare che scada
         const result = await BotLock.updateOne(
           { lockId: 'bot_lock', instanceId: INSTANCE_ID },
           { $set: { createdAt: new Date() } }
         );
         
-        // Se l'aggiornamento non ha toccato nessun documento, il lock è andato perso
         if (result.matchedCount === 0) {
-          logger.warn(`Il lock non esiste più. Tentativo di riacquisizione.`);
+          logger.warn(`Il lock non esiste più nel database. Verifico lo stato.`);
           
-          // Verifica anche che il lock sia ancora nostro
           const lock = await BotLock.findOne({ lockId: 'bot_lock' });
           
           if (!lock) {
-            // Se il lock non esiste, prova a riottenerlo
-            logger.info('Lock non trovato, provo ad acquisirlo di nuovo.');
-            
+            logger.info('Lock non trovato nel DB, provo a riottenerlo.');
             try {
-              await acquireLock();
+              await BotLock.create({
+                lockId: 'bot_lock',
+                instanceId: INSTANCE_ID
+              });
+              logger.info('Lock riottenuto con successo');
             } catch (lockErr) {
-              if (lockErr.code !== 11000) { // Non è un errore di duplicazione
+              if (lockErr.code === 11000) {
+                logger.warn('Lock già preso da un\'altra istanza');
+                const existingLock = await BotLock.findOne({ lockId: 'bot_lock' });
+                if (existingLock && existingLock.instanceId !== INSTANCE_ID) {
+                  logger.warn(`Lock detenuto da ${existingLock.instanceId}, termino.`);
+                  await gracefulShutdown('LOCK_CONFLICT');
+                }
+              } else {
                 logger.error('Errore nella riacquisizione del lock:', lockErr);
               }
             }
           } else if (lock.instanceId !== INSTANCE_ID) {
-            logger.warn(`Il lock è stato acquisito da un'altra istanza: ${lock.instanceId}. Termino.`);
+            logger.warn(`Lock detenuto da altra istanza: ${lock.instanceId}, termino.`);
             await gracefulShutdown('LOCK_LOST');
           }
         }
       } catch (err) {
         logger.error('Errore nell\'aggiornamento del lock:', err);
-        
-        // Verifica se il lock esiste ancora
-        try {
-          const lock = await BotLock.findOne({ lockId: 'bot_lock' });
-          if (!lock) {
-            logger.warn('Lock non disponibile. Tento di riottenerlo.');
-            try {
-              await acquireLock();
-            } catch (acquireErr) {
-              if (acquireErr.code !== 11000) { // Non è un errore di duplicazione
-                logger.error('Errore nella riacquisizione del lock:', acquireErr);
-              }
-            }
-          } else if (lock.instanceId !== INSTANCE_ID) {
-            logger.warn(`Lock appartenente ad altra istanza: ${lock.instanceId}. Termino.`);
-            await gracefulShutdown('LOCK_ERROR');
-          }
-        } catch (checkErr) {
-          logger.error('Errore nella verifica del lock:', checkErr);
-        }
       }
     }, 20000); // Ogni 20 secondi
   } catch (err) {
-    // Se c'è un errore duplicato, il lock è già stato preso
-    if (err.code === 11000) { // Codice di errore MongoDB per chiave duplicata
-      logger.info('Lock già acquisito da un\'altra istanza. Attendo e riprovo...');
+    if (err.code === 11000) { // Errore duplicato MongoDB
+      logger.info('Lock già acquisito da un\'altra istanza. Verifico se possibile acquisirlo.');
       
-      // Verifica se l'istanza corrente può acquisire il lock
       setTimeout(async () => {
-        if (isShuttingDown) return; // Non procedere se in fase di chiusura
+        if (isShuttingDown) return;
         
         try {
-          // Controlla se il lock esiste e se appartiene a qualcun altro
           const existingLock = await BotLock.findOne({ lockId: 'bot_lock' });
           
           if (!existingLock) {
-            logger.info('Lock non trovato, provo ad acquisirlo di nuovo.');
+            logger.info('Lock non trovato, provo ad acquisirlo.');
             if (!isShuttingDown) {
               await acquireLock();
             }
           } else {
-            logger.info(`Lock attualmente detenuto da: ${existingLock.instanceId}`);
+            logger.info(`Lock detenuto da: ${existingLock.instanceId}`);
             
-            // Calcoliamo quanto tempo fa è stato aggiornato il lock
+            // Verifica età del lock
             const lockAge = Date.now() - existingLock.createdAt.getTime();
             
-            // Se il lock è vecchio, proviamo a sovrascriverlo
             if (lockAge > 45000) { // 45 secondi
-              logger.warn(`Lock vecchio (${Math.round(lockAge/1000)}s), tento di sostituirlo.`);
+              logger.warn(`Lock vecchio (${Math.round(lockAge/1000)}s), tento rimozione.`);
               
-              if (isShuttingDown) return; // Non procedere se in fase di chiusura
+              if (isShuttingDown) return;
               
               try {
                 const deleteResult = await BotLock.deleteOne({
@@ -277,116 +345,115 @@ const acquireLock = async () => {
                     await acquireLock();
                   }
                 } else {
-                  logger.warn('Lock vecchio non rimosso, già cambiato?');
-                  // Attendi e riprova
+                  logger.warn('Lock vecchio non rimosso, forse cambiato.');
                   if (!isShuttingDown) {
                     setTimeout(() => acquireLock(), 15000);
                   }
                 }
               } catch (delErr) {
                 logger.error('Errore nella rimozione del lock vecchio:', delErr);
-                
-                // Attendi e riprova
                 if (!isShuttingDown) {
                   setTimeout(() => acquireLock(), 15000);
                 }
               }
             } else {
-              // Lock recente, attendi e riprova
-              logger.info(`Lock recente (${Math.round(lockAge/1000)}s), riprovo tra 30 secondi.`);
-              if (!isShuttingDown) {
-                setTimeout(() => acquireLock(), 30000);
-              }
+              // Lock recente, termino questa istanza
+              logger.info(`Lock recente (${Math.round(lockAge/1000)}s), termino questa istanza.`);
+              await gracefulShutdown('DUPLICATE_INSTANCE');
             }
           }
         } catch (checkErr) {
           logger.error('Errore nel controllo del lock esistente:', checkErr);
           if (!isShuttingDown) {
-            setTimeout(() => acquireLock(), 30000);
+            setTimeout(() => acquireLock(), 15000);
           }
         }
-      }, 10000);
+      }, 5000); // Attendi 5 secondi prima di verificare
     } else {
       logger.error('Errore nell\'acquisizione del lock:', err);
       if (!isShuttingDown) {
-        setTimeout(() => acquireLock(), 15000);
+        setTimeout(() => acquireLock(), 10000);
       }
     }
   }
 };
 
-// Funzione per avviare il bot con diverse strategie
+// Funzione semplificata per avviare il bot con ritentativo
 const startBot = async (attempt = 1, maxAttempts = 3) => {
   if (isShuttingDown) {
-    logger.warn('Tentativo di avvio del bot durante fase di chiusura. Abortito.');
+    logger.warn('Tentativo di avvio durante shutdown. Abortito.');
     return false;
   }
   
   if (attempt > maxAttempts) {
-    logger.error(`Tentativi di avvio del bot esauriti dopo ${maxAttempts} tentativi`);
+    logger.error(`Avvio fallito dopo ${maxAttempts} tentativi`);
     await releaseLock();
     await gracefulShutdown('STARTUP_FAILURE');
     return false;
   }
   
   try {
-    // Strategia 1: Prima proviamo a rimuovere i webhook
+    // Pulisci eventuali webhook precedenti
     await botInstance.telegram.deleteWebhook({ drop_pending_updates: true });
     logger.info(`[Tentativo ${attempt}] Webhook rimossi`);
     
-    // Attendi un breve momento
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Pausa breve dopo la rimozione del webhook
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     try {
-      // Strategia 2: Avvia il bot con polling aggressivo
+      // Avvia il bot in modalità polling con ritardo tra i tentativi
       await botInstance.launch({
         dropPendingUpdates: true,
         polling: {
-          timeout: 10, // Timeout molto breve
+          timeout: 30, // Timeout più lungo per stabilità
           limit: 100,
           allowedUpdates: ['message', 'callback_query', 'inline_query', 'edited_message', 'channel_post']
         }
       });
       
       logger.info(`Bot avviato con successo in modalità polling (tentativo ${attempt})`);
+      
+      // Una volta avviato con successo, assicurati che il lock file sia aggiornato
+      updateLockFile();
+      
       return true;
     } catch (pollingError) {
-      if (isShuttingDown) {
-        logger.info('Bot in fase di chiusura, interrompo i tentativi di avvio');
-        return false;
-      }
+      if (isShuttingDown) return false;
       
       if (pollingError.message?.includes('409: Conflict')) {
-        logger.warn(`[Tentativo ${attempt}] Errore 409: Conflict. Rilascio il lock e termino.`);
+        logger.warn(`[Tentativo ${attempt}] Errore 409: Conflict. Attendo prima di riprovare.`);
         
-        // Rilascia immediatamente il lock
-        await releaseLock();
+        // Non rilasciare il lock immediatamente, aspetta per vedere se l'altra istanza termina
+        await new Promise(resolve => setTimeout(resolve, 7000 * attempt));
         
-        // Termina l'esecuzione con un codice specifico
-        await gracefulShutdown('CONFLICT_ERROR');
-        return false;
+        if (isShuttingDown) return false;
+        
+        // Verifica se possiamo avviare il bot dopo l'attesa
+        if (attempt < maxAttempts) {
+          logger.info(`Riprovo avvio dopo pausa (tentativo ${attempt + 1}/${maxAttempts})`);
+          return await startBot(attempt + 1, maxAttempts);
+        } else {
+          logger.warn(`Troppi errori 409, rilascio il lock e termino.`);
+          await releaseLock();
+          await gracefulShutdown('CONFLICT_ERROR');
+          return false;
+        }
       } else {
-        // Altro tipo di errore non relativo al conflitto
         throw pollingError;
       }
     }
   } catch (error) {
-    if (isShuttingDown) {
-      logger.info('Bot in fase di chiusura, interrompo i tentativi di avvio');
-      return false;
-    }
+    if (isShuttingDown) return false;
     
     logger.error(`[Tentativo ${attempt}] Errore nell'avvio del bot:`, error);
     
-    // Se non siamo all'ultimo tentativo, riprova
     if (attempt < maxAttempts) {
-      const retryDelay = attempt * 10000; // 10s, 20s, 30s...
+      const retryDelay = 5000 * attempt; // Ritardo crescente: 5s, 10s, 15s...
       logger.info(`Riprovo l'avvio tra ${retryDelay/1000} secondi (tentativo ${attempt + 1}/${maxAttempts})...`);
       
       await new Promise(resolve => setTimeout(resolve, retryDelay));
       return await startBot(attempt + 1, maxAttempts);
     } else {
-      // All'ultimo tentativo, rilascia il lock e termina
       await releaseLock();
       await gracefulShutdown('STARTUP_ERROR');
       return false;
@@ -402,26 +469,47 @@ const releaseLock = async () => {
       lockCheckInterval = null;
     }
     
-    const result = await BotLock.deleteOne({ 
-      lockId: 'bot_lock', 
-      instanceId: INSTANCE_ID 
-    });
-    
-    if (result.deletedCount > 0) {
-      logger.info(`Lock rilasciato da ${INSTANCE_ID}`);
+    // Prima di tutto, verifica se il lock è ancora nostro nel database
+    const lock = await BotLock.findOne({ lockId: 'bot_lock' });
+    if (lock && lock.instanceId === INSTANCE_ID) {
+      const result = await BotLock.deleteOne({ 
+        lockId: 'bot_lock', 
+        instanceId: INSTANCE_ID 
+      });
+      
+      if (result.deletedCount > 0) {
+        logger.info(`Lock DB rilasciato da ${INSTANCE_ID}`);
+      }
     } else {
-      logger.warn(`Nessun lock da rilasciare per ${INSTANCE_ID}`);
+      logger.warn(`Nessun lock DB da rilasciare per ${INSTANCE_ID}`);
+    }
+    
+    // Rimuovi anche il lock file locale se appartiene a questa istanza
+    try {
+      if (fs.existsSync(lockFilePath)) {
+        const lockData = fs.readFileSync(lockFilePath, 'utf8');
+        const lockInfo = JSON.parse(lockData);
+        
+        if (lockInfo.instanceId === INSTANCE_ID) {
+          fs.unlinkSync(lockFilePath);
+          logger.info(`Lock file locale rimosso da ${INSTANCE_ID}`);
+        } else {
+          logger.warn(`Lock file locale appartiene ad altra istanza: ${lockInfo.instanceId}`);
+        }
+      }
+    } catch (fileErr) {
+      logger.error('Errore nella rimozione del lock file:', fileErr);
     }
   } catch (err) {
-    logger.error('Errore nel rilascio del lock:', err);
+    logger.error('Errore nel rilascio del lock DB:', err);
   }
 };
 
-// Gestione della terminazione graceful
+// Gestione dello shutdown controllato
 const gracefulShutdown = async (signal) => {
-  // Prevenire chiamate multiple
+  // Previeni chiamate multiple
   if (isShuttingDown) {
-    logger.info(`Shutdown già in corso (segnale: ${signal}), ignoro.`);
+    logger.info(`Shutdown già in corso (${signal}), ignoro.`);
     return;
   }
   
@@ -442,19 +530,24 @@ const gracefulShutdown = async (signal) => {
     }
   }
   
-  // Attendi che le connessioni esistenti si chiudano prima di uscire
+  // Nei sistemi come Render, attendi un po' prima di uscire
+  // per evitare riavvii troppo rapidi
+  const exitTimeout = signal === 'DUPLICATE_INSTANCE' ? 1000 : 5000;
+  
   setTimeout(() => {
-    logger.info('Uscita forzata dopo timeout');
+    logger.info(`Uscita con codice 0 dopo ${exitTimeout}ms`);
+    
+    // Se usciamo con codice 0, Render non riavvierà immediatamente
     process.exit(0);
-  }, 5000);
+  }, exitTimeout);
 };
 
-// Gestione segnali di terminazione
+// Gestori dei segnali del sistema operativo
 process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.once('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
 
-// Gestione eccezioni non catturate
+// Gestori di errori non catturati
 process.on('uncaughtException', async (err) => {
   logger.error('Eccezione non catturata:', err);
   await gracefulShutdown('UNCAUGHT_EXCEPTION');
