@@ -156,6 +156,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
+
   // Passo 4: Reti NON attivabili
   async (ctx) => {
     try {
@@ -174,14 +175,26 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         return ctx.scene.leave();
       }
       
-      ctx.wizard.state.brand = ctx.message.text;
-      logger.debug(`Reti attivabili impostate: ${ctx.wizard.state.brand}`);
-      
-      // Chiedi le reti NON attivabili (opzionale)
-      await ctx.reply('🚫 *Reti NON attivabili* (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente `Nessuna limitazione`.\n\nEsempi:\n- `Ionity, Tesla Supercharger`\n- `Tutte le colonnine oltre 50kW`', {
-        parse_mode: 'Markdown',
-        reply_markup: getCancelKeyboard()
-      });
+      // Se arriviamo da una callback (selezione tipo corrente)
+      // non abbiamo ctx.message, quindi saltiamo l'impostazione del brand
+      // che verrà fatta nel prossimo step
+      if (!ctx.message) {
+        // Chiedi le reti attivabili
+        await ctx.reply('🔌 *Reti attivabili*\n\nElenca tutte le reti/operatori che puoi attivare.\n\nEsempi:\n- `Tutte le colonnine`\n- `Enel X, BeCharge, Ionity, Ewiva, Neogy, etc.`\n\nSe vuoi, puoi copiare e incollare direttamente l\'elenco completo delle reti che attivi.', {
+          parse_mode: 'Markdown',
+          reply_markup: getCancelKeyboard()
+        });
+      } else {
+        // Se abbiamo un messaggio di testo, procediamo normalmente
+        ctx.wizard.state.brand = ctx.message.text;
+        logger.debug(`Reti attivabili impostate: ${ctx.wizard.state.brand}`);
+        
+        // Chiedi le reti NON attivabili (opzionale)
+        await ctx.reply('🚫 *Reti NON attivabili* (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente `Nessuna limitazione`.\n\nEsempi:\n- `Ionity, Tesla Supercharger`\n- `Tutte le colonnine oltre 50kW`', {
+          parse_mode: 'Markdown',
+          reply_markup: getCancelKeyboard()
+        });
+      }
       
       logger.info(`Fine passo 4 per utente ${ctx.from.id}`);
       return ctx.wizard.next();
@@ -191,7 +204,8 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  // Passo 5: Disponibilità oraria
+  
+  // Passo 5: Disponibilità oraria - modificato per gestire il caso in cui arriviamo da una callback
   async (ctx) => {
     try {
       logger.info(`Inizio passo 5 per utente ${ctx.from.id}`);
@@ -209,9 +223,28 @@ const sellAnnouncementScene = new Scenes.WizardScene(
         return ctx.scene.leave();
       }
       
-      // Salva le reti non attivabili
-      ctx.wizard.state.nonActivatableBrands = ctx.message.text;
-      logger.debug(`Reti NON attivabili impostate: ${ctx.wizard.state.nonActivatableBrands}`);
+      // Salva le reti non attivabili o il brand, a seconda di cosa abbiamo ricevuto
+      if (ctx.message) {
+        // Se nel passo precedente avevamo saltato l'impostazione del brand
+        // (perché venivamo da una callback), lo impostiamo ora
+        if (!ctx.wizard.state.brand) {
+          ctx.wizard.state.brand = ctx.message.text;
+          logger.debug(`Reti attivabili impostate: ${ctx.wizard.state.brand}`);
+          
+          // Chiedi le reti NON attivabili
+          await ctx.reply('🚫 *Reti NON attivabili* (opzionale)\n\nSe ci sono reti/operatori che NON puoi attivare, elencale qui.\nSe puoi attivare tutto, scrivi semplicemente `Nessuna limitazione`.\n\nEsempi:\n- `Ionity, Tesla Supercharger`\n- `Tutte le colonnine oltre 50kW`', {
+            parse_mode: 'Markdown',
+            reply_markup: getCancelKeyboard()
+          });
+          
+          // Non avanziamo allo step successivo, aspettiamo l'input dell'utente
+          return;
+        } else {
+          // Altrimenti siamo nella sequenza normale, salviamo le reti non attivabili
+          ctx.wizard.state.nonActivatableBrands = ctx.message.text;
+          logger.debug(`Reti NON attivabili impostate: ${ctx.wizard.state.nonActivatableBrands}`);
+        }
+      }
       
       // Chiedi la disponibilità oraria
       await ctx.reply('🕒 *Disponibilità oraria*\n\nIndica quando sei disponibile ad attivare la ricarica:\n\nEsempi:\n- `Sempre disponibile (24/7)`\n- `Dalle 8 alle 22 tutti i giorni`\n- `Lun-Ven 9-19, Sab-Dom 10-18`', {
@@ -227,6 +260,7 @@ const sellAnnouncementScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
+  
   // Passo 6: Zone di copertura
   async (ctx) => {
     try {
