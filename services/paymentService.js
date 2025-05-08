@@ -135,12 +135,12 @@ const sendPaymentRequest = async (offer, paymentInfo) => {
     
     // Costruisci il messaggio di richiesta pagamento
     let message = `
-💰 *Pagamento richiesto* 💰
+💰 <b>Pagamento richiesto</b> 💰
 
 Il venditore ha confermato la ricarica di ${offer.kwhCharged} kWh.
 
-💸 *Importo totale:* ${offer.totalAmount.toFixed(2)}€
-⚡ *Prezzo per kWh:* ${pricePerKwh}€`;
+💸 <b>Importo totale:</b> ${offer.totalAmount.toFixed(2)}€
+⚡ <b>Prezzo per kWh:</b> ${pricePerKwh}€`;
 
     // Aggiungi informazioni sul saldo se utilizzato
     if (paymentInfo.balanceUsed > 0) {
@@ -157,7 +157,7 @@ Il venditore ha confermato la ricarica di ${offer.kwhCharged} kWh.
     
     // Invia il messaggio all'acquirente
     await bot.telegram.sendMessage(offer.buyerId, message, {
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
       reply_markup: Markup.inlineKeyboard([
         [Markup.button.callback('💸 Ho effettuato il pagamento', `payment_sent_${offer._id}`)]
       ])
@@ -243,13 +243,13 @@ const notifyAdminAboutDonation = async (donation, donor) => {
     
     // Invia la notifica
     await bot.telegram.sendMessage(admin.userId, `
-🎁 *Nuova donazione ricevuta!* 🎁
+🎁 <b>Nuova donazione ricevuta!</b> 🎁
 
 ${donorName} ti ha donato ${donation.kwhAmount} kWh.
 
 Il tuo saldo attuale è di ${admin.balance.toFixed(2)} kWh.
 `, {
-      parse_mode: 'Markdown'
+      parse_mode: 'HTML'
     });
     
     logger.debug(`Notifica donazione inviata all'admin ${donation.adminId}`);
