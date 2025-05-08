@@ -105,6 +105,11 @@ const textMessageHandler = async (ctx, next) => {
     return; // Termina l'esecuzione se l'handler ha gestito il messaggio
   }
   
+  // Gestione della conferma di reset del database (solo admin)
+  if (await commands.dbResetConfirmationHandler(ctx)) {
+    return; // Termina l'esecuzione se l'handler ha gestito il messaggio
+  }
+  
   // Controlla se stiamo aspettando un motivo di rifiuto
   if (ctx.message.reply_to_message && ctx.session.rejectOfferId) {
     const offerId = ctx.session.rejectOfferId;
