@@ -8,6 +8,9 @@ const middleware = require('./handlers/middleware');
 const logger = require('./utils/logger');
 const { sceneCleanerMiddleware, setupPeriodicCleaner } = require('./utils/sceneCleaner');
 
+// Flag per tracciare lo stato di shutdown
+let isShuttingDown = false;
+
 // Connessione al database
 connectToDatabase()
   .then(() => logger.info('Connesso al database MongoDB'))
@@ -90,19 +93,94 @@ bot.catch((err, ctx) => {
   logger.error(`Errore per ${ctx.updateType}:`, err);
 });
 
-// Avvia il bot
-bot.launch().then(() => {
-  logger.info('Bot avviato correttamente!');
-}).catch(err => {
-  logger.error('Errore nell\'avvio del bot:', err);
+// Funzione per avviare il bot con gestione errori e riprova
+async function startBot(retryCount = 0, maxRetries = 5) {
+  try {
+    // Per i Background Worker su Render, dobbiamo usare sempre polling
+    // Prima assicuriamoci che non ci siano webhook attivi
+    await bot.telegram.deleteWebhook();
+    logger.info('Eventuali webhook precedenti rimossi');
+    
+    // Attendiamo un breve momento dopo aver rimosso il webhook
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Imposta un timeout per il polling (importante per i Background Worker)
+    await bot.launch({
+      polling: {
+        timeout: 30, // Timeout ridotto per essere più reattivi
+        limit: 100   // Numero max di aggiornamenti da ottenere
+      }
+    });
+    
+    logger.info('Bot avviato in modalità polling (Background Worker)');
+  } catch (error) {
+    // Gestione specifica per il conflitto 409
+    if (error.message && error.message.includes('409: Conflict')) {
+      logger.warn(`Conflitto rilevato (409). Tentativo ${retryCount + 1}/${maxRetries}`);
+      
+      if (retryCount < maxRetries) {
+        // Incrementa il tempo di attesa a ogni retry
+        const waitTime = Math.min(5000 + (retryCount * 5000), 30000);
+        logger.info(`Attendo ${waitTime/1000} secondi prima di riprovare...`);
+        
+        // Attendiamo un po' più a lungo prima di riprovare
+        setTimeout(() => {
+          startBot(retryCount + 1, maxRetries);
+        }, waitTime);
+      } else {
+        logger.error('Numero massimo di tentativi raggiunto. Uscita.');
+        process.exit(1);
+      }
+    } else {
+      // Altro tipo di errore
+      logger.error('Errore nell\'avvio del bot:', error);
+      
+      // In caso di errori gravi, attendiamo e riproviamo una volta
+      if (retryCount < 1) {
+        logger.info('Riprovo l\'avvio tra 10 secondi...');
+        setTimeout(() => {
+          startBot(retryCount + 1, maxRetries);
+        }, 10000);
+      } else {
+        logger.error('Errore persistente nell\'avvio del bot. Uscita.');
+        process.exit(1);
+      }
+    }
+  }
+}
+
+// Gestione di shutdown grazia
+const gracefulShutdown = (signal) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  logger.info(`Bot in fase di terminazione (${signal})`);
+  
+  // Ferma il bot e termina il processo
+  bot.stop(signal);
+  
+  // Se per qualche motivo il bot non si ferma, forziamo l'uscita dopo alcuni secondi
+  setTimeout(() => {
+    logger.info('Uscita forzata dopo timeout');
+    process.exit(0);
+  }, 5000);
+};
+
+// Gestione segnali di terminazione
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
+
+// Gestione eccezioni non catturate
+process.on('uncaughtException', (err) => {
+  logger.error('Eccezione non catturata:', err);
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
-// Enable graceful stop
-process.once('SIGINT', () => {
-  logger.info('Bot terminato (SIGINT)');
-  bot.stop('SIGINT');
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Promise non gestita:', reason);
+  gracefulShutdown('UNHANDLED_REJECTION');
 });
-process.once('SIGTERM', () => {
-  logger.info('Bot terminato (SIGTERM)');
-  bot.stop('SIGTERM');
-});
+
+// Avvia il bot
+startBot();
