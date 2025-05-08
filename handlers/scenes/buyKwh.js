@@ -35,15 +35,17 @@ const buyKwhScene = new Scenes.WizardScene(
       ctx.wizard.state.announcement = announcement;
       ctx.wizard.state.seller = seller;
       
-      // Mostra l'annuncio
-      await ctx.reply(`<b>Hai selezionato il seguente annuncio:</b>\n\n${formatSellAnnouncement(announcement, seller)}`, {
-        parse_mode: 'HTML',
-        reply_markup: Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ Accetto le condizioni', 'accept_conditions'),
-            Markup.button.callback('❌ Annulla', 'cancel_buy')
+      // Mostra l'annuncio con formattazione migliorata
+      await ctx.reply(`*Hai selezionato il seguente annuncio:*\n\n${formatSellAnnouncement(announcement, seller)}`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Accetto le condizioni', callback_data: 'accept_conditions' },
+              { text: '❌ Annulla', callback_data: 'cancel_buy' }
+            ]
           ]
-        ])
+        }
       });
       
       return ctx.wizard.next();
@@ -73,17 +75,22 @@ const buyKwhScene = new Scenes.WizardScene(
       const dateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
       if (!dateRegex.test(ctx.wizard.state.date)) {
         await ctx.reply('❌ Formato data non valido. Inserisci la data nel formato DD/MM/YYYY.', {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-          ])
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+            ]
+          }
         });
         return;
       }
       
-      await ctx.reply('A che ora vorresti ricaricare? (Inserisci l\'ora nel formato HH:MM, ad esempio 14:30)', {
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-        ])
+      await ctx.reply('🕒 *A che ora vorresti ricaricare?*\n\n_Inserisci l\'ora nel formato HH:MM, ad esempio 14:30_', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+          ]
+        }
       });
       return ctx.wizard.next();
     } catch (err) {
@@ -108,17 +115,22 @@ const buyKwhScene = new Scenes.WizardScene(
       const timeRegex = /^(\d{1,2}):(\d{2})$/;
       if (!timeRegex.test(ctx.wizard.state.time)) {
         await ctx.reply('❌ Formato ora non valido. Inserisci l\'ora nel formato HH:MM.', {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-          ])
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+            ]
+          }
         });
         return;
       }
       
-      await ctx.reply('Quale brand di colonnina utilizzerai? (ad esempio Enel X, A2A, Be Charge...)', {
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-        ])
+      await ctx.reply('🏭 *Quale brand di colonnina utilizzerai?*\n\n_Ad esempio: Enel X, A2A, Be Charge..._', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+          ]
+        }
       });
       return ctx.wizard.next();
     } catch (err) {
@@ -137,10 +149,13 @@ const buyKwhScene = new Scenes.WizardScene(
     }
     
     ctx.wizard.state.brand = ctx.message.text;
-    await ctx.reply('Inserisci le coordinate GPS della colonnina (nel formato numerico, ad esempio 41.87290, 12.47326)', {
-      reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-      ])
+    await ctx.reply('📍 *Inserisci le coordinate GPS della colonnina*\n\n_Nel formato numerico, ad esempio 41.87290, 12.47326_', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+        ]
+      }
     });
     return ctx.wizard.next();
   },
@@ -154,10 +169,13 @@ const buyKwhScene = new Scenes.WizardScene(
     }
     
     ctx.wizard.state.coordinates = ctx.message.text;
-    await ctx.reply('Vuoi aggiungere altre informazioni per il venditore? (Scrivi "nessuna" se non ce ne sono)', {
-      reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-      ])
+    await ctx.reply('ℹ️ *Vuoi aggiungere altre informazioni per il venditore?*\n\n_Scrivi "nessuna" se non ce ne sono_', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+        ]
+      }
     });
     return ctx.wizard.next();
   },
@@ -175,28 +193,30 @@ const buyKwhScene = new Scenes.WizardScene(
     try {
       const buyer = await userService.registerUser(ctx.from);
       
-      // Prepara l'anteprima dell'offerta
+      // Prepara l'anteprima dell'offerta con formattazione migliorata
       const previewText = `
-🔋 <b>Richiesta di ricarica</b> 🔋
+🔋 *Richiesta di ricarica* 🔋
 
-📅 <b>Data:</b> ${ctx.wizard.state.date}
-🕙 <b>Ora:</b> ${ctx.wizard.state.time}
-🏭 <b>Colonnina:</b> ${ctx.wizard.state.brand}
-📍 <b>Posizione:</b> ${ctx.wizard.state.coordinates}
-${ctx.wizard.state.additionalInfo ? `ℹ️ <b>Info aggiuntive:</b> ${ctx.wizard.state.additionalInfo}\n` : ''}
+📅 *Data:* ${ctx.wizard.state.date}
+🕙 *Ora:* ${ctx.wizard.state.time}
+🏭 *Colonnina:* ${ctx.wizard.state.brand}
+📍 *Posizione:* ${ctx.wizard.state.coordinates}
+${ctx.wizard.state.additionalInfo ? `ℹ️ *Info aggiuntive:* ${ctx.wizard.state.additionalInfo}\n` : ''}
 
-💰 <b>Prezzo venditore:</b> ${ctx.wizard.state.announcement.price}
-👤 <b>Venditore:</b> ${ctx.wizard.state.seller.username ? '@' + ctx.wizard.state.seller.username : ctx.wizard.state.seller.firstName}
+💰 *Prezzo venditore:* ${ctx.wizard.state.announcement.price}
+👤 *Venditore:* ${ctx.wizard.state.seller.username ? '@' + ctx.wizard.state.seller.username : ctx.wizard.state.seller.firstName}
 `;
       
-      await ctx.reply(`<b>Anteprima della tua richiesta:</b>\n\n${previewText}`, {
-        parse_mode: 'HTML',
-        reply_markup: Markup.inlineKeyboard([
-          [
-            Markup.button.callback('✅ Conferma e invia', 'send_request'),
-            Markup.button.callback('❌ Annulla', 'cancel_buy')
+      await ctx.reply(`*Anteprima della tua richiesta:*\n\n${previewText}`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Conferma e invia', callback_data: 'send_request' },
+              { text: '❌ Annulla', callback_data: 'cancel_buy' }
+            ]
           ]
-        ])
+        }
       });
       
       return ctx.wizard.next();
@@ -223,10 +243,13 @@ ${ctx.wizard.state.additionalInfo ? `ℹ️ <b>Info aggiuntive:</b> ${ctx.wizard
 // Gestori delle callback per il wizard di acquisto
 buyKwhScene.action('accept_conditions', async (ctx) => {
   await ctx.answerCbQuery('Condizioni accettate');
-  await ctx.reply('📅 In quale data vorresti ricaricare? (Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023)', {
-    reply_markup: Markup.inlineKeyboard([
-      [Markup.button.callback('❌ Annulla', 'cancel_buy')]
-    ])
+  await ctx.reply('📅 *In quale data vorresti ricaricare?*\n\n_Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023_', {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
+      ]
+    }
   });
   ctx.wizard.next();
 });
@@ -260,7 +283,9 @@ buyKwhScene.action('send_request', async (ctx) => {
     // Notifica il venditore
     await offerService.notifySellerAboutOffer(newOffer, buyer, ctx.wizard.state.announcement);
     
-    await ctx.reply('✅ La tua richiesta è stata inviata al venditore! Riceverai una notifica quando risponderà.');
+    await ctx.reply('✅ *La tua richiesta è stata inviata al venditore!*\n\nRiceverai una notifica quando risponderà.', {
+      parse_mode: 'Markdown'
+    });
     
     return ctx.scene.leave();
   } catch (err) {
@@ -281,20 +306,21 @@ buyKwhScene.command('annulla', async (ctx) => {
 buyKwhScene.command('help', async (ctx) => {
   logger.info(`Comando /help ricevuto da ${ctx.from.id} nel wizard di acquisto`);
   await ctx.reply(`
-<b>Guida all'acquisto di kWh</b>
+📚 *Guida all'acquisto di kWh*
 
 Stai acquistando kWh da un venditore. I passaggi sono:
-1. Conferma dell'annuncio: accetta le condizioni dell'annuncio
-2. Data: inserisci quando vuoi ricaricare (DD/MM/YYYY)
-3. Ora: inserisci a che ora vuoi ricaricare (HH:MM)
-4. Colonnina: indica quale brand di colonnina userai
-5. Posizione: inserisci le coordinate GPS della colonnina
-6. Info aggiuntive: aggiungi altre informazioni per il venditore
-7. Conferma: verifica i dati e conferma la richiesta
+
+1️⃣ *Conferma dell'annuncio:* accetta le condizioni dell'annuncio
+2️⃣ *Data:* inserisci quando vuoi ricaricare (DD/MM/YYYY)
+3️⃣ *Ora:* inserisci a che ora vuoi ricaricare (HH:MM)
+4️⃣ *Colonnina:* indica quale brand di colonnina userai
+5️⃣ *Posizione:* inserisci le coordinate GPS della colonnina
+6️⃣ *Info aggiuntive:* aggiungi altre informazioni per il venditore
+7️⃣ *Conferma:* verifica i dati e conferma la richiesta
 
 Per annullare in qualsiasi momento, usa il comando /annulla o premi il pulsante "❌ Annulla".
 `, {
-    parse_mode: 'HTML'
+    parse_mode: 'Markdown'
   });
 });
 
