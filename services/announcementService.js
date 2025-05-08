@@ -94,43 +94,44 @@ const publishAnnouncement = async (announcement, user) => {
     
     logger.info(`Pubblicazione annuncio ${announcement._id} nel gruppo ${groupId}, topic ${topicId}`);
     
-    // Formatta il messaggio appropriato
-    const messageText = announcement.type === 'sell' ? 
-      formatSellAnnouncement(announcement, user) : 
-      formatBuyAnnouncement(announcement, user);
-    
-    // Pubblica il messaggio nell'approccio più semplice e robusto
-    let msg;
+    // STRATEGIA: Dividi la pubblicazione in due messaggi
+    // 1) Pubblicazione solo del testo senza il bottone
+    // 2) Messaggio con il bottone in risposta al primo messaggio
     
     try {
-      // Primo tentativo: invia il messaggio senza bottoni
-      msg = await bot.telegram.sendMessage(
-        groupId,  // ID del gruppo
-        messageText, // Testo del messaggio
+      // 1. Prima invia solo il testo dell'annuncio
+      const messageText = announcement.type === 'sell' ? 
+        formatSellAnnouncement(announcement, user) : 
+        formatBuyAnnouncement(announcement, user);
+      
+      // Invia il messaggio principale senza bottoni
+      const mainMessage = await bot.telegram.sendMessage(
+        groupId,
+        messageText,
         {
-          message_thread_id: topicId,  // ID del topic/thread
-          parse_mode: 'Markdown', // Usa Markdown per formattazione
+          message_thread_id: topicId,
+          parse_mode: 'MarkdownV2' // Usa MarkdownV2 per un escape corretto
         }
       );
       
-      // Se il messaggio è stato inviato con successo, aggiungi i bottoni in un secondo momento
-      const callbackData = announcement.type === 'sell' ? 
-        `buy_kwh_${announcement._id}` : 
-        `sell_kwh_${announcement._id}`;
-      
+      // 2. Ora invia un messaggio separato con il bottone
       const buttonText = announcement.type === 'sell' ? 
         '🔋 Acquista kWh' : 
         '🔌 Vendi kWh';
       
-      // Invia un nuovo messaggio con i bottoni in risposta al primo
+      const callbackData = announcement.type === 'sell' ? 
+        `buy_kwh_${announcement._id}` : 
+        `sell_kwh_${announcement._id}`;
+      
+      // Invia un messaggio con bottone che fa riferimento al messaggio principale
       await bot.telegram.sendMessage(
         groupId,
         announcement.type === 'sell' ? 
-          'Usa il bottone qui sotto per acquistare kWh da questo venditore:' : 
-          'Usa il bottone qui sotto per vendere kWh a questo acquirente:',
+          'Clicca qui per acquistare kWh da questo venditore:' : 
+          'Clicca qui per vendere kWh a questo acquirente:',
         {
           message_thread_id: topicId,
-          reply_to_message_id: msg.message_id,
+          reply_to_message_id: mainMessage.message_id,
           reply_markup: {
             inline_keyboard: [
               [{ text: buttonText, callback_data: callbackData }]
@@ -138,17 +139,18 @@ const publishAnnouncement = async (announcement, user) => {
           }
         }
       );
-    } catch (err) {
-      logger.error(`Errore nell'invio del messaggio:`, err);
-      throw err;
+      
+      // Salva l'ID del messaggio principale
+      announcement.messageId = mainMessage.message_id;
+      await announcement.save();
+      
+      logger.debug(`Annuncio pubblicato con messageId: ${mainMessage.message_id}`);
+      return announcement;
+      
+    } catch (error) {
+      logger.error('Errore nell\'invio del messaggio:', error);
+      throw error;
     }
-    
-    // Aggiorna l'annuncio con l'ID del messaggio
-    announcement.messageId = msg.message_id;
-    await announcement.save();
-    
-    logger.debug(`Annuncio pubblicato con messageId: ${msg.message_id}`);
-    return announcement;
   } catch (err) {
     logger.error(`Errore nella pubblicazione dell'annuncio ${announcement._id}:`, err);
     throw err;
