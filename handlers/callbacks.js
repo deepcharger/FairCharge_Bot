@@ -518,14 +518,12 @@ const confirmKwhCallback = async (ctx) => {
     
     const offer = await Offer.findById(offerId);
     if (!offer || offer.status !== 'kwh_confirmed') {
-      await ctx.reply('❌ Questa ricarica non è disponibile o non è nello stato corretto.');
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
       return;
     }
     
-    // Chiedi al venditore di inserire l'importo da pagare
-    await ctx.reply(`💰 *Inserisci l'importo totale da pagare per ${offer.kwhCharged} kWh*\n\n_Formato: 23.45_`, {
-      parse_mode: 'Markdown'
-    });
+    // Richiedi al venditore di inserire il costo unitario per kWh
+    await paymentService.requestUnitPriceFromSeller(offer);
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.paymentAmountOfferId = offerId;
@@ -564,19 +562,96 @@ const setPaymentCallback = async (ctx) => {
     
     const offer = await Offer.findById(offerId);
     if (!offer || offer.status !== 'kwh_confirmed') {
-      await ctx.reply('❌ Questa ricarica non è disponibile o non è nello stato corretto.');
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
       return;
     }
     
-    // Chiedi al venditore di inserire l'importo da pagare
-    await ctx.reply(`💰 *Inserisci l'importo totale da pagare per ${offer.kwhCharged} kWh*\n\n_Formato: 23.45_`, {
+    // Richiedi al venditore di inserire il costo unitario per kWh
+    await ctx.reply(`⚡ *Inserisci il costo unitario per kWh*
+
+L'acquirente ha dichiarato di aver caricato *${offer.kwhCharged} kWh*.
+
+Per favore, inserisci il costo unitario per ogni kWh (esempio: 0.22 per 22 centesimi).
+Il sistema calcolerà automaticamente l'importo totale da pagare.`, {
       parse_mode: 'Markdown'
     });
     
     // Salva l'ID dell'offerta in un contesto per l'handler successivo
     ctx.session.paymentAmountOfferId = offerId;
   } catch (err) {
-    console.error('Errore nella richiesta di pagamento:', err);
+    logger.error(`Errore nella richiesta di pagamento:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+// Handler per confermare e inviare la richiesta di pagamento
+const confirmPaymentRequestCallback = async (ctx) => {
+  try {
+    // Formato: confirm_payment_OFFERID_TOTALAMOUNT
+    const match = ctx.match[0].match(/confirm_payment_(.+)_(.+)/);
+    if (!match) {
+      await ctx.answerCbQuery('Formato callback non valido');
+      return;
+    }
+    
+    const offerId = match[1];
+    const totalAmount = parseFloat(match[2]);
+    
+    if (isNaN(totalAmount) || totalAmount <= 0) {
+      await ctx.answerCbQuery('Importo non valido');
+      return;
+    }
+    
+    await ctx.answerCbQuery('Invio richiesta di pagamento...');
+    
+    // Recupera l'offerta
+    const offer = await Offer.findById(offerId);
+    if (!offer || offer.status !== 'kwh_confirmed') {
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
+      return;
+    }
+    
+    // Aggiorna l'offerta con l'importo totale e lo stato
+    await offerService.updateOfferStatus(offerId, 'payment_pending', { totalAmount: totalAmount });
+    
+    // Recupera l'acquirente
+    const buyer = await User.findOne({ userId: offer.buyerId });
+    
+    // Gestisci il pagamento con saldo
+    const paymentInfo = await paymentService.handlePaymentWithBalance(offer, buyer);
+    
+    // Invia la richiesta di pagamento all'acquirente
+    await paymentService.sendPaymentRequest(offer, paymentInfo);
+    
+    await ctx.reply(`✅ Richiesta di pagamento di ${totalAmount.toFixed(2)}€ inviata all'acquirente. Riceverai una notifica quando effettuerà il pagamento.`);
+  } catch (err) {
+    logger.error(`Errore nella conferma della richiesta di pagamento:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore');
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+// Handler per annullare la richiesta di pagamento
+const cancelPaymentRequestCallback = async (ctx) => {
+  try {
+    const offerId = ctx.match[1];
+    
+    await ctx.answerCbQuery('Richiesta di pagamento annullata');
+    
+    // Recupera l'offerta
+    const offer = await Offer.findById(offerId);
+    if (!offer || offer.status !== 'kwh_confirmed') {
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
+      return;
+    }
+    
+    await ctx.reply('❌ Richiesta di pagamento annullata. Puoi inserire nuovamente il costo unitario per kWh quando sei pronto.');
+    
+    // Richiedi nuovamente il costo unitario
+    await paymentService.requestUnitPriceFromSeller(offer);
+  } catch (err) {
+    logger.error(`Errore nell'annullamento della richiesta di pagamento:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore');
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
@@ -590,7 +665,7 @@ const paymentSentCallback = async (ctx) => {
     
     const offer = await Offer.findById(offerId);
     if (!offer || offer.status !== 'payment_pending') {
-      await ctx.reply('❌ Questa ricarica non è disponibile o non è nello stato corretto.');
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
       return;
     }
     
@@ -617,7 +692,7 @@ const paymentConfirmedCallback = async (ctx) => {
     // Recupera l'offerta
     const offer = await Offer.findById(offerId);
     if (!offer || offer.status !== 'payment_sent') {
-      await ctx.reply('❌ Questa ricarica non è disponibile o non è nello stato corretto.');
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
       return;
     }
     
@@ -911,7 +986,7 @@ module.exports = {
   publishSellCallback,
   cancelSellCallback,
   buyKwhCallback,
-  startBuyCallback,    // Aggiungi questa nuova funzione
+  startBuyCallback,
   acceptConditionsCallback,
   cancelBuyCallback,
   sendRequestCallback,
@@ -925,6 +1000,8 @@ module.exports = {
   confirmKwhCallback,
   disputeKwhCallback,
   setPaymentCallback,
+  confirmPaymentRequestCallback,
+  cancelPaymentRequestCallback,
   paymentSentCallback,
   paymentConfirmedCallback,
   paymentNotReceivedCallback,
