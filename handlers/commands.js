@@ -76,96 +76,6 @@ const myChargesCommand = async (ctx) => {
       return;
     }
     
-    // Funzione per generare pulsanti inline per un'offerta
-    const generateButtons = async (offer, index) => {
-      const offerId = offer._id;
-      const isbuyer = user.userId === offer.buyerId;
-      
-      logger.debug(`Generazione bottoni per offerta ${offerId}:`, {
-        offerStatus: offer.status,
-        isbuyer: isbuyer
-      });
-      
-      let buttons = [];
-      
-      // Bottoni per le offerte accettate (acquirente)
-      if (offer.status === 'accepted' && isbuyer) {
-        logger.debug(`Creando bottoni per acquirente, offerta accettata ${offerId}`);
-        buttons = [
-          [
-            Markup.button.callback('🔋 Sono pronto per caricare', `ready_to_charge_${offerId}`),
-            Markup.button.callback('❌ Annulla', `cancel_charge_${offerId}`)
-          ]
-        ];
-      }
-      
-      // Bottoni per le offerte pronte (venditore)
-      else if (offer.status === 'ready_to_charge' && !isbuyer) {
-        buttons = [
-          [Markup.button.callback('▶️ Ho avviato la ricarica', `charging_started_${offerId}`)]
-        ];
-      }
-      
-      // Bottoni per la ricarica iniziata (acquirente)
-      else if (offer.status === 'charging_started' && isbuyer) {
-        buttons = [
-          [
-            Markup.button.callback('✅ Ricarica partita', `charging_ok_${offerId}`),
-            Markup.button.callback('❌ Problemi', `charging_issues_${offerId}`)
-          ]
-        ];
-      }
-      
-      // Bottoni per la ricarica in corso (acquirente)
-      else if (offer.status === 'charging' && isbuyer) {
-        buttons = [
-          [Markup.button.callback('🔋 Ho terminato la ricarica', `charging_completed_${offerId}`)]
-        ];
-      }
-      
-      // Bottoni per i kWh confermati (venditore)
-      else if (offer.status === 'kwh_confirmed' && !isbuyer) {
-        buttons = [
-          [Markup.button.callback('💶 Inserisci importo da pagare', `set_payment_${offerId}`)]
-        ];
-      }
-      
-      // Bottoni per il pagamento in attesa (acquirente)
-      else if (offer.status === 'payment_pending' && isbuyer) {
-        buttons = [
-          [Markup.button.callback('💸 Ho effettuato il pagamento', `payment_sent_${offerId}`)]
-        ];
-      }
-      
-      // Bottoni per il pagamento inviato (venditore)
-      else if (offer.status === 'payment_sent' && !isbuyer) {
-        buttons = [
-          [
-            Markup.button.callback('✅ Confermo pagamento ricevuto', `payment_confirmed_${offerId}`),
-            Markup.button.callback('❌ Non ho ricevuto', `payment_not_received_${offerId}`)
-          ]
-        ];
-      }
-      
-      // Bottoni per il feedback (offerte completate)
-      else if (offer.status === 'completed') {
-        const hasGivenFeedback = isbuyer ? offer.buyerFeedback && offer.buyerFeedback.rating !== undefined : 
-          offer.sellerFeedback && offer.sellerFeedback.rating !== undefined;
-        
-        if (!hasGivenFeedback) {
-          buttons = [
-            [
-              Markup.button.callback('👍 Positivo', `feedback_positive_${offerId}`),
-              Markup.button.callback('👎 Negativo', `feedback_negative_${offerId}`)
-            ]
-          ];
-        }
-      }
-      
-      logger.debug(`Bottoni generati per offerta ${offerId}: ${buttons.length > 0 ? 'SI' : 'NO'}`);
-      return buttons.length > 0 ? buttons : null;
-    };
-    
     // Funzione per inviare il messaggio di una categoria
     const sendCategoryMessage = async (title, offersList, icon) => {
       if (offersList.length === 0) return;
@@ -179,37 +89,172 @@ const myChargesCommand = async (ctx) => {
         const otherUserId = user.userId === offer.buyerId ? offer.sellerId : offer.buyerId;
         const otherUser = await User.findOne({ userId: otherUserId });
         const role = user.userId === offer.buyerId ? 'Acquirente' : 'Venditore';
+        const isbuyer = user.userId === offer.buyerId;
         
         text += await formatOfferListItem(offer, i, otherUser, role) + '\n';
         
-        // Debug: logga informazioni sull'offerta
         logger.debug(`Dettagli offerta #${i + 1} ${offer._id}:`, {
           status: offer.status,
-          isbuyer: user.userId === offer.buyerId,
+          isbuyer: isbuyer,
           buyerId: offer.buyerId,
           sellerId: offer.sellerId,
           userId: user.userId
         });
         
-        // Invia i bottoni per questa offerta
-        const buttons = await generateButtons(offer, i);
-        if (buttons) {
-          await ctx.reply(`Opzioni per ricarica #${i + 1}:`, {
-            reply_markup: Markup.inlineKeyboard(buttons)
-          });
-          logger.debug(`Bottoni inviati per offerta ${offer._id}`);
-        } else {
-          // In caso di problemi, forza l'invio dei bottoni per offerte accettate quando sei l'acquirente
-          if (offer.status === 'accepted' && user.userId === offer.buyerId) {
-            logger.warn(`Forzatura invio bottoni per offerta accettata ${offer._id}`);
-            await ctx.reply(`Opzioni per ricarica #${i + 1}:`, {
-              reply_markup: Markup.inlineKeyboard([
-                [
-                  Markup.button.callback('🔋 Sono pronto per caricare', `ready_to_charge_${offer._id}`),
-                  Markup.button.callback('❌ Annulla', `cancel_charge_${offer._id}`)
+        // Invia i bottoni per questa offerta usando direttamente ctx.telegram.sendMessage
+        // che è più affidabile per i bottoni rispetto a ctx.reply con Markup
+        if (offer.status === 'accepted' && isbuyer) {
+          // Bottoni per le offerte accettate (acquirente)
+          logger.debug(`Inviando bottoni per offerta accettata ${offer._id} (acquirente)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '🔋 Sono pronto per caricare', callback_data: `ready_to_charge_${offer._id}` },
+                    { text: '❌ Annulla', callback_data: `cancel_charge_${offer._id}` }
+                  ]
                 ]
-              ])
-            });
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'ready_to_charge' && !isbuyer) {
+          // Bottoni per le offerte pronte (venditore)
+          logger.debug(`Inviando bottoni per offerta ready_to_charge ${offer._id} (venditore)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '▶️ Ho avviato la ricarica', callback_data: `charging_started_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'charging_started' && isbuyer) {
+          // Bottoni per la ricarica iniziata (acquirente)
+          logger.debug(`Inviando bottoni per offerta charging_started ${offer._id} (acquirente)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Ricarica partita', callback_data: `charging_ok_${offer._id}` },
+                    { text: '❌ Problemi', callback_data: `charging_issues_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'charging' && isbuyer) {
+          // Bottoni per la ricarica in corso (acquirente)
+          logger.debug(`Inviando bottoni per offerta charging ${offer._id} (acquirente)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '🔋 Ho terminato la ricarica', callback_data: `charging_completed_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'kwh_confirmed' && !isbuyer) {
+          // Bottoni per i kWh confermati (venditore)
+          logger.debug(`Inviando bottoni per offerta kwh_confirmed ${offer._id} (venditore)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '💶 Inserisci importo da pagare', callback_data: `set_payment_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'payment_pending' && isbuyer) {
+          // Bottoni per il pagamento in attesa (acquirente)
+          logger.debug(`Inviando bottoni per offerta payment_pending ${offer._id} (acquirente)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '💸 Ho effettuato il pagamento', callback_data: `payment_sent_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'payment_sent' && !isbuyer) {
+          // Bottoni per il pagamento inviato (venditore)
+          logger.debug(`Inviando bottoni per offerta payment_sent ${offer._id} (venditore)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Confermo pagamento ricevuto', callback_data: `payment_confirmed_${offer._id}` },
+                    { text: '❌ Non ho ricevuto', callback_data: `payment_not_received_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        } 
+        else if (offer.status === 'completed') {
+          // Bottoni per il feedback (offerte completate)
+          const hasGivenFeedback = isbuyer ? 
+            offer.buyerFeedback && offer.buyerFeedback.rating !== undefined : 
+            offer.sellerFeedback && offer.sellerFeedback.rating !== undefined;
+          
+          if (!hasGivenFeedback) {
+            logger.debug(`Inviando bottoni per feedback offerta completed ${offer._id}`);
+            
+            await ctx.telegram.sendMessage(
+              ctx.chat.id,
+              `Opzioni per ricarica #${i + 1}:`,
+              {
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: '👍 Positivo', callback_data: `feedback_positive_${offer._id}` },
+                      { text: '👎 Negativo', callback_data: `feedback_negative_${offer._id}` }
+                    ]
+                  ]
+                }
+              }
+            );
           }
         }
       }
