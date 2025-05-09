@@ -80,10 +80,17 @@ const myChargesCommand = async (ctx) => {
     const generateButtons = async (offer, index) => {
       const offerId = offer._id;
       const isbuyer = user.userId === offer.buyerId;
+      
+      logger.debug(`Generazione bottoni per offerta ${offerId}:`, {
+        offerStatus: offer.status,
+        isbuyer: isbuyer
+      });
+      
       let buttons = [];
       
       // Bottoni per le offerte accettate (acquirente)
       if (offer.status === 'accepted' && isbuyer) {
+        logger.debug(`Creando bottoni per acquirente, offerta accettata ${offerId}`);
         buttons = [
           [
             Markup.button.callback('🔋 Sono pronto per caricare', `ready_to_charge_${offerId}`),
@@ -155,6 +162,7 @@ const myChargesCommand = async (ctx) => {
         }
       }
       
+      logger.debug(`Bottoni generati per offerta ${offerId}: ${buttons.length > 0 ? 'SI' : 'NO'}`);
       return buttons.length > 0 ? buttons : null;
     };
     
@@ -174,12 +182,35 @@ const myChargesCommand = async (ctx) => {
         
         text += await formatOfferListItem(offer, i, otherUser, role) + '\n';
         
+        // Debug: logga informazioni sull'offerta
+        logger.debug(`Dettagli offerta #${i + 1} ${offer._id}:`, {
+          status: offer.status,
+          isbuyer: user.userId === offer.buyerId,
+          buyerId: offer.buyerId,
+          sellerId: offer.sellerId,
+          userId: user.userId
+        });
+        
         // Invia i bottoni per questa offerta
         const buttons = await generateButtons(offer, i);
         if (buttons) {
           await ctx.reply(`Opzioni per ricarica #${i + 1}:`, {
             reply_markup: Markup.inlineKeyboard(buttons)
           });
+          logger.debug(`Bottoni inviati per offerta ${offer._id}`);
+        } else {
+          // In caso di problemi, forza l'invio dei bottoni per offerte accettate quando sei l'acquirente
+          if (offer.status === 'accepted' && user.userId === offer.buyerId) {
+            logger.warn(`Forzatura invio bottoni per offerta accettata ${offer._id}`);
+            await ctx.reply(`Opzioni per ricarica #${i + 1}:`, {
+              reply_markup: Markup.inlineKeyboard([
+                [
+                  Markup.button.callback('🔋 Sono pronto per caricare', `ready_to_charge_${offer._id}`),
+                  Markup.button.callback('❌ Annulla', `cancel_charge_${offer._id}`)
+                ]
+              ])
+            });
+          }
         }
       }
       
