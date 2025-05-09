@@ -98,7 +98,8 @@ ${offer.additionalInfo ? `ℹ️ *Info aggiuntive:* ${offer.additionalInfo}\n` :
 
     // Aggiungi dettagli sull'annuncio se disponibile
     if (announcement) {
-      offerText += `\n💰 *Prezzo tuo annuncio:* ${announcement.price}`;
+      // Non mostrare il prezzo dell'annuncio, invece chiarire il processo di pagamento
+      offerText += `\n📝 *Nota:* Il prezzo finale verrà definito dopo che l'acquirente avrà dichiarato i kWh caricati.`;
     } else {
       offerText += '\n💰 *Nota:* Questa richiesta utilizza il saldo donato da te o da altri venditori.';
     }
