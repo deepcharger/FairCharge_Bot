@@ -5,7 +5,7 @@ const userService = require('../../services/userService');
 const offerService = require('../../services/offerService');
 const Announcement = require('../../models/announcement');
 const User = require('../../models/user');
-const { formatSellAnnouncementSafe, formatChargeRequest } = require('../../utils/formatters');
+const { formatSellAnnouncementSafe, sanitizeMarkdown } = require('../../utils/formatters');
 const logger = require('../../utils/logger');
 
 // Crea la scena per il wizard
@@ -49,8 +49,20 @@ const buyKwhScene = new Scenes.WizardScene(
       ctx.wizard.state.announcement = announcement;
       ctx.wizard.state.seller = seller;
       
-      // Mostra l'annuncio con formattazione sicura per evitare errori di parsing Markdown
-      await ctx.reply(`*Hai selezionato il seguente annuncio:*\n\n${formatSellAnnouncementSafe(announcement, seller)}`, {
+      // Creare una versione semplificata dell'annuncio per evitare problemi di formattazione
+      const announcementText = `
+*Hai selezionato il seguente annuncio:*
+
+ID: ${sanitizeMarkdown(announcementId)}
+Venditore: @${sanitizeMarkdown(seller.username || seller.firstName)}
+Prezzo: ${sanitizeMarkdown(announcement.price)}
+Corrente: ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+Reti attivabili: ${sanitizeMarkdown(announcement.brand)}
+Zone: ${sanitizeMarkdown(announcement.location)}
+${announcement.nonActivatableBrands ? `Reti non attivabili: ${sanitizeMarkdown(announcement.nonActivatableBrands)}\n` : ''}
+`;
+      
+      await ctx.reply(announcementText, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
@@ -207,18 +219,29 @@ const buyKwhScene = new Scenes.WizardScene(
     try {
       const buyer = await userService.registerUser(ctx.from);
       
+      // Sanitizza tutti i dati inseriti dall'utente
+      const sanitizedDate = sanitizeMarkdown(ctx.wizard.state.date);
+      const sanitizedTime = sanitizeMarkdown(ctx.wizard.state.time);
+      const sanitizedBrand = sanitizeMarkdown(ctx.wizard.state.brand);
+      const sanitizedCoordinates = sanitizeMarkdown(ctx.wizard.state.coordinates);
+      const sanitizedAdditionalInfo = ctx.wizard.state.additionalInfo ? sanitizeMarkdown(ctx.wizard.state.additionalInfo) : '';
+      const sanitizedPrice = sanitizeMarkdown(ctx.wizard.state.announcement.price);
+      const sanitizedVendorName = ctx.wizard.state.seller.username ? 
+        '@' + sanitizeMarkdown(ctx.wizard.state.seller.username) : 
+        sanitizeMarkdown(ctx.wizard.state.seller.firstName);
+      
       // Prepara l'anteprima dell'offerta con formattazione migliorata
       const previewText = `
 🔋 *Richiesta di ricarica* 🔋
 
-📅 *Data:* ${ctx.wizard.state.date}
-🕙 *Ora:* ${ctx.wizard.state.time}
-🏭 *Colonnina:* ${ctx.wizard.state.brand}
-📍 *Posizione:* ${ctx.wizard.state.coordinates}
-${ctx.wizard.state.additionalInfo ? `ℹ️ *Info aggiuntive:* ${ctx.wizard.state.additionalInfo}\n` : ''}
+📅 *Data:* ${sanitizedDate}
+🕙 *Ora:* ${sanitizedTime}
+🏭 *Colonnina:* ${sanitizedBrand}
+📍 *Posizione:* ${sanitizedCoordinates}
+${sanitizedAdditionalInfo ? `ℹ️ *Info aggiuntive:* ${sanitizedAdditionalInfo}\n` : ''}
 
-💰 *Prezzo venditore:* ${ctx.wizard.state.announcement.price}
-👤 *Venditore:* ${ctx.wizard.state.seller.username ? '@' + ctx.wizard.state.seller.username : ctx.wizard.state.seller.firstName}
+💰 *Prezzo venditore:* ${sanitizedPrice}
+👤 *Venditore:* ${sanitizedVendorName}
 `;
       
       await ctx.reply(`*Anteprima della tua richiesta:*\n\n${previewText}`, {
