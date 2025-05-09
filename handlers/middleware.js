@@ -322,13 +322,13 @@ Per favore, verifica e rispondi usando il comando /le_mie_ricariche.
   // Controlla se stiamo aspettando l'importo da pagare
   if (ctx.session.paymentAmountOfferId) {
     const offerId = ctx.session.paymentAmountOfferId;
-    const amountText = ctx.message.text;
+    const unitPriceText = ctx.message.text;
     
     try {
       // Verifica che sia un numero valido
-      const amount = parseFloat(amountText);
-      if (isNaN(amount) || amount <= 0) {
-        await ctx.reply('❌ Per favore, inserisci un importo valido maggiore di zero.');
+      const unitPrice = parseFloat(unitPriceText);
+      if (isNaN(unitPrice) || unitPrice <= 0) {
+        await ctx.reply('❌ Per favore, inserisci un costo unitario valido maggiore di zero (esempio: 0.22).');
         return;
       }
       
@@ -339,24 +339,19 @@ Per favore, verifica e rispondi usando il comando /le_mie_ricariche.
         return;
       }
       
-      // Aggiorna l'offerta con l'importo totale e lo stato
-      await offerService.updateOfferStatus(offerId, 'payment_pending', { totalAmount: amount });
+      // Calcola l'importo totale
+      const totalAmount = await paymentService.calculateTotalAmount(offer, unitPrice);
       
-      // Recupera l'acquirente
-      const buyer = await User.findOne({ userId: offer.buyerId });
+      // Mostra il calcolo al venditore per conferma
+      await paymentService.showCalculationToSeller(offer, unitPrice, totalAmount);
       
-      // Gestisci il pagamento con saldo
-      const paymentInfo = await paymentService.handlePaymentWithBalance(offer, buyer);
-      
-      // Invia la richiesta di pagamento all'acquirente
-      await paymentService.sendPaymentRequest(offer, paymentInfo);
-      
-      await ctx.reply(`✅ Richiesta di pagamento di ${amount.toFixed(2)}€ inviata all'acquirente. Riceverai una notifica quando effettuerà il pagamento.`);
+      // Salviamo il prezzo unitario nella sessione per la callback di conferma
+      ctx.session.unitPrice = unitPrice;
       
       // Pulisci il contesto
       delete ctx.session.paymentAmountOfferId;
     } catch (err) {
-      console.error('Errore nel processare l\'importo da pagare:', err);
+      logger.error(`Errore nel processare il costo unitario per kWh:`, err);
       await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
       delete ctx.session.paymentAmountOfferId;
     }
