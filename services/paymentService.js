@@ -28,7 +28,7 @@ const createTransaction = async (offer) => {
       sellerId: offer.sellerId,
       buyerId: offer.buyerId,
       kwhAmount: offer.kwhCharged,
-      price: offer.totalAmount / offer.kwhCharged,
+      price: offer.totalAmount / offer.kwhCharged, // Prezzo unitario per kWh
       totalAmount: offer.totalAmount,
       paymentMethod: offer.paymentMethod,
       status: 'completed'
@@ -115,6 +115,108 @@ const handlePaymentWithBalance = async (offer, buyer) => {
 };
 
 /**
+ * Chiede al venditore di inserire il costo unitario per kWh
+ * @param {Object} offer - L'offerta da pagare
+ * @returns {Promise<void>}
+ */
+const requestUnitPriceFromSeller = async (offer) => {
+  try {
+    logger.info(`Richiesta di inserimento costo unitario per offerta ${offer._id}`);
+    
+    // Verifica che l'offerta abbia i kWh dichiarati
+    if (!offer.kwhCharged || offer.kwhCharged <= 0) {
+      logger.error(`Errore: kwhCharged non definito o non valido nell'offerta ${offer._id}`);
+      throw new Error("I kWh caricati non sono stati dichiarati");
+    }
+    
+    // Invia il messaggio al venditore
+    await bot.telegram.sendMessage(offer.sellerId, `
+💰 *Inserisci il costo per ogni kWh*
+
+L'acquirente ha dichiarato di aver caricato *${offer.kwhCharged} kWh*.
+
+Per favore, inserisci il costo unitario per kWh (esempio: 0.22 per 22 centesimi di € per kWh).
+Il sistema calcolerà automaticamente l'importo totale da pagare.
+`, {
+      parse_mode: 'Markdown'
+    });
+    
+    logger.debug(`Richiesta costo unitario inviata al venditore ${offer.sellerId}`);
+  } catch (err) {
+    logger.error(`Errore nella richiesta del costo unitario per offerta ${offer._id}:`, err);
+    throw err;
+  }
+};
+
+/**
+ * Calcola l'importo totale in base ai kWh e al costo unitario
+ * @param {Object} offer - L'offerta da pagare
+ * @param {Number} unitPrice - Costo unitario per kWh
+ * @returns {Promise<Number>} Importo totale calcolato
+ */
+const calculateTotalAmount = async (offer, unitPrice) => {
+  try {
+    const kwhAmount = offer.kwhCharged;
+    const totalAmount = kwhAmount * unitPrice;
+    
+    logger.info(`Calcolo importo totale per offerta ${offer._id}`, {
+      kwhAmount,
+      unitPrice,
+      totalAmount
+    });
+    
+    return totalAmount;
+  } catch (err) {
+    logger.error(`Errore nel calcolo dell'importo totale per offerta ${offer._id}:`, err);
+    throw err;
+  }
+};
+
+/**
+ * Mostra il calcolo al venditore per conferma
+ * @param {Object} offer - L'offerta da pagare
+ * @param {Number} unitPrice - Costo unitario per kWh
+ * @param {Number} totalAmount - Importo totale calcolato
+ * @returns {Promise<void>}
+ */
+const showCalculationToSeller = async (offer, unitPrice, totalAmount) => {
+  try {
+    logger.info(`Mostra calcolo al venditore per offerta ${offer._id}`, {
+      offerId: offer._id,
+      sellerId: offer.sellerId,
+      unitPrice,
+      totalAmount
+    });
+    
+    // Invia il messaggio al venditore
+    await bot.telegram.sendMessage(offer.sellerId, `
+📊 *Verifica il calcolo*
+
+L'acquirente ha caricato: *${offer.kwhCharged} kWh*
+Costo unitario: *${unitPrice.toFixed(2)}€ per kWh*
+Importo totale: *${totalAmount.toFixed(2)}€*
+
+Confermi questa richiesta di pagamento?
+`, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Conferma e invia richiesta', callback_data: `confirm_payment_${offer._id}_${totalAmount.toFixed(2)}` },
+            { text: '❌ Annulla', callback_data: `cancel_payment_${offer._id}` }
+          ]
+        ]
+      }
+    });
+    
+    logger.debug(`Calcolo mostrato al venditore ${offer.sellerId}`);
+  } catch (err) {
+    logger.error(`Errore nella visualizzazione del calcolo per offerta ${offer._id}:`, err);
+    throw err;
+  }
+};
+
+/**
  * Invia una richiesta di pagamento all'acquirente
  * @param {Object} offer - L'offerta da pagare
  * @param {Object} paymentInfo - Informazioni sul pagamento
@@ -126,9 +228,24 @@ const sendPaymentRequest = async (offer, paymentInfo) => {
       offerId: offer._id,
       buyerId: offer.buyerId,
       totalAmount: offer.totalAmount,
-      balanceUsed: paymentInfo.balanceUsed,
-      amountToPay: paymentInfo.amountToPay
+      balanceUsed: paymentInfo?.balanceUsed || 0
     });
+    
+    // Verifica che offer.totalAmount sia definito
+    if (offer.totalAmount === undefined || offer.totalAmount === null) {
+      logger.error(`Errore: totalAmount non definito nell'offerta ${offer._id}`);
+      throw new Error("L'importo totale dell'offerta non è definito");
+    }
+    
+    // Verifica che paymentInfo sia definito
+    if (!paymentInfo) {
+      paymentInfo = {
+        originalAmount: offer.totalAmount,
+        balanceUsed: 0,
+        amountToPay: offer.totalAmount,
+        remainingBalance: 0
+      };
+    }
     
     // Calcola il prezzo per kWh
     const pricePerKwh = (offer.totalAmount / offer.kwhCharged).toFixed(2);
@@ -262,6 +379,9 @@ Il tuo saldo attuale è di ${admin.balance.toFixed(2)} kWh.
 module.exports = {
   createTransaction,
   handlePaymentWithBalance,
+  requestUnitPriceFromSeller,
+  calculateTotalAmount,
+  showCalculationToSeller,
   sendPaymentRequest,
   createDonation,
   notifyAdminAboutDonation
