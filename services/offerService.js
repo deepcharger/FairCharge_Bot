@@ -6,6 +6,7 @@ const User = require('../models/user');
 const moment = require('moment');
 const { Markup } = require('telegraf');
 const logger = require('../utils/logger');
+const mongoose = require('mongoose');
 
 /**
  * Crea una nuova offerta di ricarica
@@ -26,7 +27,9 @@ const createOffer = async (offerData, announcementId = null) => {
     
     // Crea l'oggetto offerta
     const newOffer = new Offer({
-      announcementId: announcementId,
+      // In caso di annuncio manuale (senza ID) o ID personalizzato, non impostare announcementId
+      // per evitare errori di cast a ObjectId
+      ...(announcementId && mongoose.Types.ObjectId.isValid(announcementId) ? { announcementId } : {}),
       buyerId: offerData.buyerId,
       sellerId: offerData.sellerId,
       date: moment(offerData.date, 'DD/MM/YYYY').toDate(),
@@ -47,8 +50,8 @@ const createOffer = async (offerData, announcementId = null) => {
     await newOffer.save();
     logger.debug(`Offerta creata con ID: ${newOffer._id}`);
     
-    // Se c'è un annuncio collegato, aggiungi l'offerta all'annuncio
-    if (announcementId) {
+    // Se c'è un annuncio collegato ed è un ObjectId valido, aggiungi l'offerta all'annuncio
+    if (announcementId && mongoose.Types.ObjectId.isValid(announcementId)) {
       const announcement = await Announcement.findById(announcementId);
       if (announcement) {
         announcement.offers.push(newOffer._id);
