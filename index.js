@@ -72,7 +72,126 @@ function cleanupLocalLock() {
         if (lockInfo.instanceId === INSTANCE_ID) {
           fs.unlinkSync(LOCK_FILE_PATH);
           // Non è possibile loggare qui durante l'exit
-        }
+      };
+
+// Funzione per rilasciare tutti i lock
+const releaseAllLocks = async () => {
+  try {
+    logger.info(`Rilascio di tutti i lock per l'istanza ${INSTANCE_ID}...`);
+    
+    if (lockCheckInterval) {
+      clearInterval(lockCheckInterval);
+      lockCheckInterval = null;
+    }
+    
+    // Rilascia il lock di esecuzione
+    try {
+      const execResult = await BotExecutionLock.deleteOne({ 
+        lockId: 'bot_execution_lock', 
+        instanceId: INSTANCE_ID 
+      });
+      
+      if (execResult.deletedCount > 0) {
+        logger.info(`Lock di esecuzione rilasciato da ${INSTANCE_ID}`);
+      } else {
+        logger.info(`Nessun lock di esecuzione da rilasciare per ${INSTANCE_ID}`);
+      }
+    } catch (execErr) {
+      logger.error('Errore nel rilascio del lock di esecuzione:', execErr);
+    }
+    
+    // Rilascia il master lock
+    try {
+      const masterResult = await BotMasterLock.deleteOne({ 
+        lockId: 'bot_master_lock', 
+        instanceId: INSTANCE_ID 
+      });
+      
+      if (masterResult.deletedCount > 0) {
+        logger.info(`Master lock rilasciato da ${INSTANCE_ID}`);
+      } else {
+        logger.info(`Nessun master lock da rilasciare per ${INSTANCE_ID}`);
+      }
+    } catch (masterErr) {
+      logger.error('Errore nel rilascio del master lock:', masterErr);
+    }
+    
+    // Rimuovi il lock file locale
+    cleanupLocalLock();
+    
+  } catch (err) {
+    logger.error('Errore nel rilascio di tutti i lock:', err);
+  }
+};
+
+// Gestione dello shutdown controllato
+const gracefulShutdown = async (signal) => {
+  // Previeni chiamate multiple
+  if (isShuttingDown) {
+    logger.info(`Shutdown già in corso (${signal}), ignoro.`);
+    return;
+  }
+  
+  isShuttingDown = true;
+  
+  logger.info(`Bot in fase di terminazione (${signal})`);
+  
+  // Rilascia tutti i lock
+  await releaseAllLocks();
+  
+  // Ferma il bot
+  if (botInstance && isBotRunning) {
+    try {
+      await botInstance.stop(signal);
+      isBotRunning = false;
+      logger.info('Bot fermato con successo');
+    } catch (err) {
+      logger.error('Errore nell\'arresto del bot:', err);
+    }
+  }
+  
+  // Registra i tentativi di riavvio effettuati
+  if (restartAttempts > 0) {
+    logger.info(`L'istanza ha tentato ${restartAttempts} riavvii durante il ciclo di vita`);
+  }
+  
+  // Chiusura della connessione al database
+  try {
+    await mongoose.connection.close();
+    logger.info('Connessione al database chiusa');
+  } catch (err) {
+    logger.error('Errore nella chiusura della connessione al database:', err);
+  }
+  
+  // Imposta un timeout più breve per terminare
+  const exitTimeout = signal === 'DUPLICATE_INSTANCE' ? 1000 : 5000;
+  
+  setTimeout(() => {
+    logger.info(`Uscita con codice 0 dopo ${exitTimeout}ms`);
+    
+    // Se usciamo con codice 0, Render non riavvierà immediatamente
+    process.exit(0);
+  }, exitTimeout);
+};
+
+// Gestori dei segnali del sistema operativo
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
+
+// Gestori di errori non catturati
+process.on('uncaughtException', async (err) => {
+  logger.error('Eccezione non catturata:', err);
+  await gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+process.on('unhandledRejection', async (reason, promise) => {
+  logger.error('Promise non gestita:', reason);
+  await gracefulShutdown('UNHANDLED_REJECTION');
+});
+
+// Avvia il processo di inizializzazione
+init();
       } catch (e) {
         // Errore nella lettura del file, tenta comunque di rimuoverlo
         try { fs.unlinkSync(LOCK_FILE_PATH); } catch (e2) { /* ignora */ }
@@ -455,6 +574,9 @@ const setupBot = () => {
   botInstance.action(/confirm_kwh_(.+)/, callbacks.confirmKwhCallback);
   botInstance.action(/dispute_kwh_(.+)/, callbacks.disputeKwhCallback);
   botInstance.action(/set_payment_(.+)/, callbacks.setPaymentCallback);
+  // Registrazione delle callback per confermare/annullare la richiesta di pagamento
+  botInstance.action(/confirm_payment_(.+)_(.+)/, callbacks.confirmPaymentRequestCallback);
+  botInstance.action(/cancel_payment_(.+)/, callbacks.cancelPaymentRequestCallback);
   botInstance.action(/payment_sent_(.+)/, callbacks.paymentSentCallback);
   botInstance.action(/payment_confirmed_(.+)/, callbacks.paymentConfirmedCallback);
   botInstance.action(/payment_not_received_(.+)/, callbacks.paymentNotReceivedCallback);
@@ -573,123 +695,3 @@ const startBot = async (attempt = 1, maxAttempts = LAUNCH_RETRY_COUNT) => {
       return false;
     }
   }
-};
-
-// Funzione per rilasciare tutti i lock
-const releaseAllLocks = async () => {
-  try {
-    logger.info(`Rilascio di tutti i lock per l'istanza ${INSTANCE_ID}...`);
-    
-    if (lockCheckInterval) {
-      clearInterval(lockCheckInterval);
-      lockCheckInterval = null;
-    }
-    
-    // Rilascia il lock di esecuzione
-    try {
-      const execResult = await BotExecutionLock.deleteOne({ 
-        lockId: 'bot_execution_lock', 
-        instanceId: INSTANCE_ID 
-      });
-      
-      if (execResult.deletedCount > 0) {
-        logger.info(`Lock di esecuzione rilasciato da ${INSTANCE_ID}`);
-      } else {
-        logger.info(`Nessun lock di esecuzione da rilasciare per ${INSTANCE_ID}`);
-      }
-    } catch (execErr) {
-      logger.error('Errore nel rilascio del lock di esecuzione:', execErr);
-    }
-    
-    // Rilascia il master lock
-    try {
-      const masterResult = await BotMasterLock.deleteOne({ 
-        lockId: 'bot_master_lock', 
-        instanceId: INSTANCE_ID 
-      });
-      
-      if (masterResult.deletedCount > 0) {
-        logger.info(`Master lock rilasciato da ${INSTANCE_ID}`);
-      } else {
-        logger.info(`Nessun master lock da rilasciare per ${INSTANCE_ID}`);
-      }
-    } catch (masterErr) {
-      logger.error('Errore nel rilascio del master lock:', masterErr);
-    }
-    
-    // Rimuovi il lock file locale
-    cleanupLocalLock();
-    
-  } catch (err) {
-    logger.error('Errore nel rilascio di tutti i lock:', err);
-  }
-};
-
-// Gestione dello shutdown controllato
-const gracefulShutdown = async (signal) => {
-  // Previeni chiamate multiple
-  if (isShuttingDown) {
-    logger.info(`Shutdown già in corso (${signal}), ignoro.`);
-    return;
-  }
-  
-  isShuttingDown = true;
-  
-  logger.info(`Bot in fase di terminazione (${signal})`);
-  
-  // Rilascia tutti i lock
-  await releaseAllLocks();
-  
-  // Ferma il bot
-  if (botInstance && isBotRunning) {
-    try {
-      await botInstance.stop(signal);
-      isBotRunning = false;
-      logger.info('Bot fermato con successo');
-    } catch (err) {
-      logger.error('Errore nell\'arresto del bot:', err);
-    }
-  }
-  
-  // Registra i tentativi di riavvio effettuati
-  if (restartAttempts > 0) {
-    logger.info(`L'istanza ha tentato ${restartAttempts} riavvii durante il ciclo di vita`);
-  }
-  
-  // Chiusura della connessione al database
-  try {
-    await mongoose.connection.close();
-    logger.info('Connessione al database chiusa');
-  } catch (err) {
-    logger.error('Errore nella chiusura della connessione al database:', err);
-  }
-  
-  // Imposta un timeout più breve per terminare
-  const exitTimeout = signal === 'DUPLICATE_INSTANCE' ? 1000 : 5000;
-  
-  setTimeout(() => {
-    logger.info(`Uscita con codice 0 dopo ${exitTimeout}ms`);
-    
-    // Se usciamo con codice 0, Render non riavvierà immediatamente
-    process.exit(0);
-  }, exitTimeout);
-};
-
-// Gestori dei segnali del sistema operativo
-process.once('SIGINT', () => gracefulShutdown('SIGINT'));
-process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.once('SIGQUIT', () => gracefulShutdown('SIGQUIT'));
-
-// Gestori di errori non catturati
-process.on('uncaughtException', async (err) => {
-  logger.error('Eccezione non catturata:', err);
-  await gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
-
-process.on('unhandledRejection', async (reason, promise) => {
-  logger.error('Promise non gestita:', reason);
-  await gracefulShutdown('UNHANDLED_REJECTION');
-});
-
-// Avvia il processo di inizializzazione
-init();
