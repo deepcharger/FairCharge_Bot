@@ -72,7 +72,16 @@ function cleanupLocalLock() {
         if (lockInfo.instanceId === INSTANCE_ID) {
           fs.unlinkSync(LOCK_FILE_PATH);
           // Non è possibile loggare qui durante l'exit
-      };
+        }
+      } catch (e) {
+        // Errore nella lettura del file, tenta comunque di rimuoverlo
+        try { fs.unlinkSync(LOCK_FILE_PATH); } catch (e2) { /* ignora */ }
+      }
+    }
+  } catch (e) {
+    // Non possiamo fare molto durante l'exit
+  }
+}
 
 // Funzione per rilasciare tutti i lock
 const releaseAllLocks = async () => {
@@ -189,18 +198,6 @@ process.on('unhandledRejection', async (reason, promise) => {
   logger.error('Promise non gestita:', reason);
   await gracefulShutdown('UNHANDLED_REJECTION');
 });
-
-// Avvia il processo di inizializzazione
-init();
-      } catch (e) {
-        // Errore nella lettura del file, tenta comunque di rimuoverlo
-        try { fs.unlinkSync(LOCK_FILE_PATH); } catch (e2) { /* ignora */ }
-      }
-    }
-  } catch (e) {
-    // Non possiamo fare molto durante l'exit
-  }
-}
 
 // Connessione al database e inizializzazione
 const init = async () => {
@@ -695,3 +692,7 @@ const startBot = async (attempt = 1, maxAttempts = LAUNCH_RETRY_COUNT) => {
       return false;
     }
   }
+};
+
+// Avvia il processo di inizializzazione
+init();
