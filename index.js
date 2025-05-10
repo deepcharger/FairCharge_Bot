@@ -553,8 +553,7 @@ const setupBot = () => {
 
   // Registra i gestori delle callback
   botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
-  botInstance.action(/start_buy_(.+)/, callbacks.startBuyCallback); // Nuovo handler per l'avvio in chat privata
-  // Modificato da connector_ a current_ per corrispondere al pattern nella scene
+  botInstance.action(/start_buy_(.+)/, callbacks.startBuyCallback);
   botInstance.action(/current_(.+)/, callbacks.connectorTypeCallback);
   botInstance.action('publish_sell', callbacks.publishSellCallback);
   botInstance.action('cancel_sell', callbacks.cancelSellCallback);
@@ -571,18 +570,18 @@ const setupBot = () => {
   botInstance.action(/confirm_kwh_(.+)/, callbacks.confirmKwhCallback);
   botInstance.action(/dispute_kwh_(.+)/, callbacks.disputeKwhCallback);
   botInstance.action(/set_payment_(.+)/, callbacks.setPaymentCallback);
-  // Registrazione delle callback per confermare/annullare la richiesta di pagamento
+  botInstance.action(/verify_payment_(.+)/, callbacks.verifyPaymentCallback);
   botInstance.action(/confirm_payment_(.+)_(.+)/, callbacks.confirmPaymentRequestCallback);
   botInstance.action(/cancel_payment_(.+)/, callbacks.cancelPaymentRequestCallback);
   botInstance.action(/payment_sent_(.+)/, callbacks.paymentSentCallback);
   botInstance.action(/payment_confirmed_(.+)/, callbacks.paymentConfirmedCallback);
   botInstance.action(/payment_not_received_(.+)/, callbacks.paymentNotReceivedCallback);
-  botInstance.action(/donate_2_(.+)/, callbacks.donateFixedCallback);
-  botInstance.action(/donate_custom_(.+)/, callbacks.donateCustomCallback);
-  botInstance.action(/donate_skip_(.+)/, callbacks.donateSkipCallback);
   botInstance.action(/feedback_positive_(.+)/, callbacks.feedbackPositiveCallback);
   botInstance.action(/feedback_negative_(.+)/, callbacks.feedbackNegativeCallback);
   botInstance.action(/cancel_charge_(.+)/, callbacks.cancelChargeCallback);
+  botInstance.action(/donate_2_(.+)/, callbacks.donateFixedCallback);
+  botInstance.action(/donate_custom_(.+)/, callbacks.donateCustomCallback);
+  botInstance.action(/donate_skip_(.+)/, callbacks.donateSkipCallback);
   botInstance.action('send_manual_request', callbacks.sendManualRequestCallback);
   botInstance.action('cancel_manual_request', callbacks.cancelManualRequestCallback);
 
