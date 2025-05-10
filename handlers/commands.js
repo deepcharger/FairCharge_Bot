@@ -232,6 +232,25 @@ const myChargesCommand = async (ctx) => {
             }
           );
         } 
+        // CORREZIONE: Aggiunto handler per payment_pending per il venditore
+        else if (offer.status === 'payment_pending' && !isbuyer) {
+          // Bottoni per il pagamento in attesa (venditore)
+          logger.debug(`Inviando bottoni per offerta payment_pending ${offer._id} (venditore - in attesa di pagamento)`);
+          
+          await ctx.telegram.sendMessage(
+            ctx.chat.id,
+            `Opzioni per ricarica #${i + 1}:`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '💸 Verifica pagamento', callback_data: `verify_payment_${offer._id}` }
+                  ]
+                ]
+              }
+            }
+          );
+        }
         else if (offer.status === 'completed') {
           // Bottoni per il feedback (offerte completate)
           const hasGivenFeedback = isbuyer ? 
