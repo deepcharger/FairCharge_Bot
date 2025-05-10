@@ -116,14 +116,15 @@ const publishAnnouncement = async (announcement, user) => {
         ]
       };
       
-      // Invia un messaggio UNICO con testo e bottone insieme
+      // IMPORTANTE: NON SPECIFICARE parse_mode per evitare problemi di formattazione
+      // Invia il messaggio come testo semplice senza alcuna formattazione
       const sentMessage = await bot.telegram.sendMessage(
         groupId,
         messageText,
         {
           message_thread_id: topicId,
-          parse_mode: 'Markdown',
-          reply_markup: inlineKeyboard  // Aggiungi il bottone direttamente al messaggio principale
+          // Rimuovi parse_mode per evitare problemi di parsing
+          reply_markup: inlineKeyboard
         }
       );
       
