@@ -10,20 +10,26 @@ const logger = require('./logger');
 const sanitizeMarkdown = (text) => {
   if (!text) return '';
   
-  // Rimuovi completamente i caratteri problematici che possono interferire con Markdown
+  // Rimuovi TUTTI i caratteri speciali Markdown per essere sicuri
   return text
     .replace(/\*/g, '') // Rimuovi asterischi
     .replace(/_/g, '') // Rimuovi underscore
     .replace(/`/g, '') // Rimuovi backtick
-    .replace(/\[/g, '(') // Sostituisci parentesi quadre con tonde
+    .replace(/\[/g, '(')
     .replace(/\]/g, ')')
-    .replace(/~/g, '') // Rimuovi tilde
-    .replace(/>/g, ':') // Sostituisci caratteri che possono interferire
-    .replace(/#/g, 'n.') // Sostituisci cancelletto
-    .replace(/\|/g, '/') // Sostituisci pipe con slash
-    .replace(/\{/g, '(') // Sostituisci parentesi graffe con tonde
-    .replace(/\}/g, ')')
-    .replace(/!/g, '.') // Sostituisci punti esclamativi con punti
+    .replace(/\(/g, '(')
+    .replace(/\)/g, ')')
+    .replace(/~/g, '')
+    .replace(/>/g, '')
+    .replace(/#/g, '')
+    .replace(/\+/g, '')
+    .replace(/-/g, '')
+    .replace(/=/g, '')
+    .replace(/\|/g, '')
+    .replace(/\{/g, '')
+    .replace(/\}/g, '')
+    .replace(/\./g, ' ')
+    .replace(/!/g, ' ')
     .trim();
 };
 
@@ -135,113 +141,133 @@ ${otherInfo ? `📋 *Condizioni:* ${otherInfo}\n` : '📋 *Condizioni:* Non spec
  * @returns {String} Testo formattato dell'annuncio
  */
 const formatSellAnnouncementSafe = (announcement, user) => {
-  // Sanitizza tutti i campi che potrebbero contenere caratteri Markdown
-  const sanitizedAnnouncement = {
-    ...announcement,
-    price: sanitizeMarkdown(announcement.price),
-    brand: sanitizeMarkdown(announcement.brand),
-    location: sanitizeMarkdown(announcement.location),
-    nonActivatableBrands: announcement.nonActivatableBrands ? sanitizeMarkdown(announcement.nonActivatableBrands) : '',
-    additionalInfo: announcement.additionalInfo ? sanitizeMarkdown(announcement.additionalInfo) : ''
-  };
-  
-  const sanitizedUser = {
-    ...user,
-    username: user.username ? sanitizeMarkdown(user.username) : '',
-    firstName: user.firstName ? sanitizeMarkdown(user.firstName) : ''
-  };
-  
-  // Calcola la percentuale di feedback positivi dell'utente
-  let positivePercentage = user.getPositivePercentage();
-  
-  // Testo per il feedback
-  let feedbackText;
-  if (positivePercentage === null) {
-    feedbackText = '(Nuovo venditore)';
-  } else if (user.totalRatings <= 0) {
-    feedbackText = '(Nuovo venditore)';
-  } else {
-    feedbackText = `(${positivePercentage}% positivi, ${user.totalRatings} recensioni)`;
-  }
-  
-  // Badge venditore affidabile
-  let trustedBadgeEmoji = '';
-  let trustedBadgeText = '';
-  if (positivePercentage !== null && positivePercentage >= 90 && user.totalRatings >= 5) {
-    trustedBadgeEmoji = '🏆 🛡️';
-    trustedBadgeText = 'VENDITORE AFFIDABILE';
-  }
-
-  // Formattazione ID annuncio più leggibile
-  let displayId = announcement._id;
-  // Se l'ID è nel formato personalizzato userId_yyyy-MM-dd_HH-mm
-  if (typeof announcement._id === 'string' && announcement._id.includes('_')) {
-    // Estrai solo la parte della data/ora
-    const idParts = announcement._id.split('_');
-    if (idParts.length >= 2) {
-      displayId = idParts.slice(1).join('_');
-    }
-  }
-
-  // Estrazione info di disponibilità e pagamento dall'additionalInfo
-  let availabilityInfo = 'Non specificata';
-  let paymentInfo = 'PayPal, bonifico, contanti (da specificare)';
-  let otherInfo = '';
-  
-  if (sanitizedAnnouncement.additionalInfo) {
-    const additionalInfo = sanitizedAnnouncement.additionalInfo;
+  try {
+    // IMPORTANTE: sanitizza TUTTI i campi provenienti dall'utente
+    const sanitizedAnnouncement = {
+      ...announcement,
+      _id: announcement._id,
+      price: sanitizeMarkdown(announcement.price || ''),
+      connectorType: announcement.connectorType, // Questo è un enum, non va sanitizzato
+      brand: sanitizeMarkdown(announcement.brand || ''),
+      location: sanitizeMarkdown(announcement.location || ''),
+      nonActivatableBrands: announcement.nonActivatableBrands ? sanitizeMarkdown(announcement.nonActivatableBrands) : '',
+      additionalInfo: announcement.additionalInfo ? sanitizeMarkdown(announcement.additionalInfo) : ''
+    };
     
-    // Estrai la disponibilità
-    if (additionalInfo.includes('Disponibilità:')) {
-      const availabilityLine = additionalInfo
-        .split('Disponibilità:')[1]
-        .split('\n')[0]
-        .trim();
-      if (availabilityLine) {
-        availabilityInfo = availabilityLine;
+    const sanitizedUser = {
+      ...user,
+      username: user.username ? sanitizeMarkdown(user.username) : '',
+      firstName: user.firstName ? sanitizeMarkdown(user.firstName) : '',
+      positiveRatings: user.positiveRatings,
+      totalRatings: user.totalRatings
+    };
+
+    // Calcola la percentuale di feedback positivi dell'utente
+    let positivePercentage = user.getPositivePercentage();
+    
+    // Testo per il feedback
+    let feedbackText;
+    if (positivePercentage === null) {
+      feedbackText = '(Nuovo venditore)';
+    } else if (user.totalRatings <= 0) {
+      feedbackText = '(Nuovo venditore)';
+    } else {
+      feedbackText = `(${positivePercentage}% positivi, ${user.totalRatings} recensioni)`;
+    }
+    
+    // Badge venditore affidabile
+    let trustedBadgeEmoji = '';
+    let trustedBadgeText = '';
+    if (positivePercentage !== null && positivePercentage >= 90 && user.totalRatings >= 5) {
+      trustedBadgeEmoji = '🏆 🛡️';
+      trustedBadgeText = 'VENDITORE AFFIDABILE';
+    }
+
+    // Formattazione ID annuncio più leggibile
+    let displayId = sanitizedAnnouncement._id;
+    // Se l'ID è nel formato personalizzato userId_yyyy-MM-dd_HH-mm
+    if (typeof sanitizedAnnouncement._id === 'string' && sanitizedAnnouncement._id.includes('_')) {
+      // Estrai solo la parte della data/ora
+      const idParts = sanitizedAnnouncement._id.split('_');
+      if (idParts.length >= 2) {
+        displayId = idParts.slice(1).join('_');
       }
     }
+
+    // Estrazione info di disponibilità e pagamento dall'additionalInfo
+    let availabilityInfo = 'Non specificata';
+    let paymentInfo = 'PayPal, bonifico, contanti (da specificare)';
+    let otherInfo = '';
     
-    // Estrai i metodi di pagamento
-    if (additionalInfo.includes('Metodi di pagamento:')) {
-      const paymentLine = additionalInfo
-        .split('Metodi di pagamento:')[1]
-        .split('\n')[0]
-        .trim();
-      if (paymentLine) {
-        paymentInfo = paymentLine;
+    if (sanitizedAnnouncement.additionalInfo) {
+      const additionalInfo = sanitizedAnnouncement.additionalInfo;
+      
+      // Estrai la disponibilità
+      if (additionalInfo.includes('Disponibilità:')) {
+        const availabilityLine = additionalInfo
+          .split('Disponibilità:')[1]
+          .split('\n')[0]
+          .trim();
+        if (availabilityLine) {
+          availabilityInfo = availabilityLine;
+        }
+      }
+      
+      // Estrai i metodi di pagamento
+      if (additionalInfo.includes('Metodi di pagamento:')) {
+        const paymentLine = additionalInfo
+          .split('Metodi di pagamento:')[1]
+          .split('\n')[0]
+          .trim();
+        if (paymentLine) {
+          paymentInfo = paymentLine;
+        }
+      }
+      
+      // Altre info (escludi disponibilità e pagamento)
+      const lines = additionalInfo.split('\n');
+      const otherLines = lines.filter(line => 
+        !line.includes('Disponibilità:') && 
+        !line.includes('Metodi di pagamento:')
+      );
+      
+      if (otherLines.length > 0) {
+        otherInfo = otherLines.join('\n');
       }
     }
+
+    // SEMPLIFICA LA FORMATTAZIONE MARKDOWN
+    // Usa una versione con formattazione minima per ridurre i problemi
+    const message = `${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n\n` : ''}Vendita kWh sharing
+
+🆔 ID annuncio: ${displayId}
+👤 Venditore: @${sanitizedUser.username || sanitizedUser.firstName}
+⭐ Feedback: ${feedbackText}
+
+💲 Prezzo: ${sanitizedAnnouncement.price}
+⚡ Corrente: ${sanitizedAnnouncement.connectorType === 'both' ? 'AC e DC' : sanitizedAnnouncement.connectorType}
+✅ Reti attivabili: ${sanitizedAnnouncement.brand}
+🗺️ Zone: ${sanitizedAnnouncement.location}
+${sanitizedAnnouncement.nonActivatableBrands ? `⛔ Reti non attivabili: ${sanitizedAnnouncement.nonActivatableBrands}\n` : ''}🕒 Disponibilità: ${availabilityInfo}
+💰 Pagamento: ${paymentInfo}
+${otherInfo ? `📋 Condizioni: ${otherInfo}\n` : '📋 Condizioni: Non specificate\n'}
+📝 Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione.`;
+
+    return message;
+  } catch (error) {
+    logger.error(`Errore nella formattazione sicura dell'annuncio: ${error.message}`);
     
-    // Altre info (escludi disponibilità e pagamento)
-    const lines = additionalInfo.split('\n');
-    const otherLines = lines.filter(line => 
-      !line.includes('Disponibilità:') && 
-      !line.includes('Metodi di pagamento:')
-    );
-    
-    if (otherLines.length > 0) {
-      otherInfo = otherLines.join('\n');
-    }
+    // In caso di errore, fornisci una versione ultra-semplificata senza formattazione Markdown
+    return `Vendita kWh sharing
+
+ID annuncio: ${announcement._id}
+Venditore: @${user.username || user.firstName}
+
+Prezzo: ${announcement.price}
+Corrente: ${announcement.connectorType}
+Reti attivabili: ${announcement.brand}
+Zone: ${announcement.location}`;
   }
-
-  // Costruisci il testo del messaggio con Markdown SANITIZZATO
-  const message = `${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n\n` : ''}*Vendita kWh sharing*
-
-🆔 *ID annuncio:* ${displayId}
-👤 *Venditore:* @${sanitizedUser.username || sanitizedUser.firstName}
-${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
-
-💲 *Prezzo:* ${sanitizedAnnouncement.price}
-⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-✅ *Reti attivabili:* ${sanitizedAnnouncement.brand}
-🗺️ *Zone:* ${sanitizedAnnouncement.location}
-${sanitizedAnnouncement.nonActivatableBrands ? `⛔ *Reti non attivabili:* ${sanitizedAnnouncement.nonActivatableBrands}\n` : ''}🕒 *Disponibilità:* ${availabilityInfo}
-💰 *Pagamento:* ${paymentInfo}
-${otherInfo ? `📋 *Condizioni:* ${otherInfo}\n` : '📋 *Condizioni:* Non specificate\n'}
-📝 _Dopo la compravendita, il venditore inviterà l'acquirente a esprimere un giudizio sulla transazione._`;
-
-  return message;
 };
 
 /**
@@ -287,18 +313,18 @@ const formatBuyAnnouncement = (announcement, user) => {
     }
   }
 
-  // Costruisci il testo del messaggio semplificato
-  const message = `*Cerco kWh sharing*
+  // Costruisci il testo del messaggio semplificato - SENZA MARKDOWN
+  const message = `Cerco kWh sharing
 
-🆔 *ID annuncio:* ${displayId}
-👤 *Acquirente:* @${sanitizedUser.username || sanitizedUser.firstName}
-${user.totalRatings > 0 ? `⭐ *Feedback:* ${feedbackText}` : `⭐ ${feedbackText}`}
+🆔 ID annuncio: ${displayId}
+👤 Acquirente: @${sanitizedUser.username || sanitizedUser.firstName}
+⭐ Feedback: ${feedbackText}
 
-💲 *Prezzo massimo:* ${sanitizedAnnouncement.price}
-⚡ *Corrente:* ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-🗺️ *Zone:* ${sanitizedAnnouncement.location}
-${sanitizedAnnouncement.additionalInfo ? `📋 *Note:* ${sanitizedAnnouncement.additionalInfo}\n` : ''}
-📝 _Dopo la compravendita, l'acquirente inviterà il venditore a esprimere un giudizio sulla transazione._`;
+💲 Prezzo massimo: ${sanitizedAnnouncement.price}
+⚡ Corrente: ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
+🗺️ Zone: ${sanitizedAnnouncement.location}
+${sanitizedAnnouncement.additionalInfo ? `📋 Note: ${sanitizedAnnouncement.additionalInfo}\n` : ''}
+📝 Dopo la compravendita, l'acquirente inviterà il venditore a esprimere un giudizio sulla transazione.`;
 
   return message;
 };
@@ -317,16 +343,16 @@ const formatChargeRequest = (offer, seller) => {
   const sanitizedUsername = seller.username ? sanitizeMarkdown(seller.username) : sanitizeMarkdown(seller.firstName);
 
   return `
-🔋 *Richiesta di ricarica* 🔋
+🔋 Richiesta di ricarica 🔋
 
-📅 *Data:* ${offer.date}
-🕙 *Ora:* ${offer.time}
-🏭 *Colonnina:* ${sanitizedBrand}
-📍 *Posizione:* ${sanitizedCoordinates}
-${sanitizedInfo ? `ℹ️ *Info aggiuntive:* ${sanitizedInfo}\n` : ''}
+📅 Data: ${offer.date}
+🕙 Ora: ${offer.time}
+🏭 Colonnina: ${sanitizedBrand}
+📍 Posizione: ${sanitizedCoordinates}
+${sanitizedInfo ? `ℹ️ Info aggiuntive: ${sanitizedInfo}\n` : ''}
 
-💰 *Prezzo venditore:* ${seller.announcement ? sanitizeMarkdown(seller.announcement.price) : 'Non specificato'}
-👤 *Venditore:* ${seller.username ? '@' + sanitizedUsername : sanitizedUsername}
+💰 Prezzo venditore: ${seller.announcement ? sanitizeMarkdown(seller.announcement.price) : 'Non specificato'}
+👤 Venditore: ${seller.username ? '@' + sanitizedUsername : sanitizedUsername}
 `;
 };
 
