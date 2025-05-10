@@ -11,7 +11,7 @@ const User = require('../models/user');
 const moment = require('moment');
 const logger = require('../utils/logger');
 
-// Handler per selezionare il tipo di connettore
+// Handler per selezionare il tipo di corrente
 const connectorTypeCallback = async (ctx) => {
   // Estrai il tipo di corrente dal match
   const currentType = ctx.match[1];
@@ -584,6 +584,41 @@ Il sistema calcolerà automaticamente l'importo totale da pagare.`, {
   }
 };
 
+// Handler per verificare lo stato del pagamento
+const verifyPaymentCallback = async (ctx) => {
+  const offerId = ctx.match[1];
+  
+  try {
+    await ctx.answerCbQuery('Verifica pagamento in corso...');
+    
+    const offer = await Offer.findById(offerId);
+    if (!offer || offer.status !== 'payment_pending') {
+      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
+      return;
+    }
+    
+    // Recupera l'acquirente
+    const buyer = await User.findOne({ userId: offer.buyerId });
+    const buyerName = buyer ? 
+      (buyer.username ? '@' + buyer.username : buyer.firstName) : 
+      'Acquirente';
+    
+    await ctx.reply(`
+💰 *Verifica pagamento* 💰
+
+${buyerName} deve ancora confermare di aver effettuato il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
+
+Ti verrà inviata una notifica non appena l'acquirente confermerà il pagamento.
+`, {
+      parse_mode: 'Markdown'
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella verifica del pagamento per offerta ${offerId}:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
 // Handler per confermare e inviare la richiesta di pagamento
 const confirmPaymentRequestCallback = async (ctx) => {
   try {
@@ -1012,5 +1047,6 @@ module.exports = {
   donateCustomCallback,
   donateSkipCallback,
   sendManualRequestCallback,
-  cancelManualRequestCallback
+  cancelManualRequestCallback,
+  verifyPaymentCallback // Aggiunta la nuova callback
 };
