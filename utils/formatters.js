@@ -9,15 +9,21 @@ const logger = require('./logger');
  */
 const sanitizeMarkdown = (text) => {
   if (!text) return '';
-  // Rimuovi o sostituisci caratteri problematici per Markdown
+  
+  // Rimuovi completamente i caratteri problematici che possono interferire con Markdown
   return text
     .replace(/\*/g, '') // Rimuovi asterischi
     .replace(/_/g, '') // Rimuovi underscore
     .replace(/`/g, '') // Rimuovi backtick
-    .replace(/\[/g, '(')
+    .replace(/\[/g, '(') // Sostituisci parentesi quadre con tonde
     .replace(/\]/g, ')')
-    .replace(/\(/g, '(')
-    .replace(/\)/g, ')')
+    .replace(/~/g, '') // Rimuovi tilde
+    .replace(/>/g, ':') // Sostituisci caratteri che possono interferire
+    .replace(/#/g, 'n.') // Sostituisci cancelletto
+    .replace(/\|/g, '/') // Sostituisci pipe con slash
+    .replace(/\{/g, '(') // Sostituisci parentesi graffe con tonde
+    .replace(/\}/g, ')')
+    .replace(/!/g, '.') // Sostituisci punti esclamativi con punti
     .trim();
 };
 
@@ -219,7 +225,7 @@ const formatSellAnnouncementSafe = (announcement, user) => {
     }
   }
 
-  // Costruisci il testo del messaggio
+  // Costruisci il testo del messaggio con Markdown SANITIZZATO
   const message = `${trustedBadgeEmoji ? `${trustedBadgeEmoji} ${trustedBadgeText}\n\n` : ''}*Vendita kWh sharing*
 
 🆔 *ID annuncio:* ${displayId}
