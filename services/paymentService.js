@@ -360,8 +360,50 @@ const notifyAdminAboutDonation = async (donation, donor) => {
     // Recupera l'admin
     const admin = await User.findOne({ userId: donation.adminId });
     if (!admin) {
-      logger.warn(`Admin ${donation.adminId} non trovato durante la notifica della donazione`);
-      throw new Error('Admin non trovato');
+      logger.error(`Admin ${donation.adminId} non trovato durante la notifica della donazione`);
+      
+      // Crea automaticamente l'account admin se non esiste
+      logger.info(`Tentativo di creazione automatica dell'account admin con ID ${donation.adminId}`);
+      const newAdmin = new User({
+        userId: donation.adminId,
+        username: 'admin',
+        firstName: 'Administrator',
+        balance: donation.kwhAmount // Assegna subito la donazione
+      });
+      
+      try {
+        await newAdmin.save();
+        logger.info(`Account admin creato automaticamente con ID ${donation.adminId} e saldo iniziale ${donation.kwhAmount} kWh`);
+        
+        // Invia la notifica all'admin appena creato
+        try {
+          // Costruisci il nome del donatore
+          const donorName = donor.username ? 
+            '@' + donor.username : 
+            donor.firstName || 'Venditore';
+          
+          await bot.telegram.sendMessage(newAdmin.userId, `
+🎁 <b>Nuova donazione ricevuta!</b> 🎁
+
+${donorName} ti ha donato ${donation.kwhAmount} kWh.
+
+Il tuo saldo attuale è di ${newAdmin.balance.toFixed(2)} kWh.
+
+<b>Nota:</b> Il tuo account admin è stato creato automaticamente.
+`, {
+            parse_mode: 'HTML'
+          });
+          
+          logger.info(`Notifica donazione inviata all'admin ${donation.adminId} (account creato automaticamente)`);
+          return;
+        } catch (notifyErr) {
+          logger.warn(`Impossibile inviare notifica all'admin ${donation.adminId} (account creato automaticamente):`, notifyErr);
+          return;
+        }
+      } catch (createErr) {
+        logger.error(`Errore nella creazione automatica dell'account admin ${donation.adminId}:`, createErr);
+        throw new Error('Errore nella creazione automatica dell\'account admin');
+      }
     }
     
     // Costruisci il nome del donatore
@@ -370,20 +412,26 @@ const notifyAdminAboutDonation = async (donation, donor) => {
       donor.firstName || 'Venditore';
     
     // Invia la notifica
-    await bot.telegram.sendMessage(admin.userId, `
+    try {
+      await bot.telegram.sendMessage(admin.userId, `
 🎁 <b>Nuova donazione ricevuta!</b> 🎁
 
 ${donorName} ti ha donato ${donation.kwhAmount} kWh.
 
 Il tuo saldo attuale è di ${admin.balance.toFixed(2)} kWh.
 `, {
-      parse_mode: 'HTML'
-    });
-    
-    logger.debug(`Notifica donazione inviata all'admin ${donation.adminId}`);
+        parse_mode: 'HTML'
+      });
+      
+      logger.debug(`Notifica donazione inviata all'admin ${donation.adminId}`);
+    } catch (sendErr) {
+      logger.error(`Errore nell'invio della notifica all'admin ${donation.adminId}:`, sendErr);
+      throw new Error(`Errore nell'invio della notifica all'admin: ${sendErr.message}`);
+    }
   } catch (err) {
     logger.error(`Errore nella notifica all'admin ${donation.adminId} riguardo donazione ${donation._id}:`, err);
-    throw err;
+    // Non rilanciare l'errore per evitare che fallisca l'intera transazione
+    // La donazione è stata già registrata nel database, solo la notifica è fallita
   }
 };
 
