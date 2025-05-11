@@ -72,6 +72,17 @@ const createTransaction = async (offer) => {
  */
 const handlePaymentWithBalance = async (offer, buyer) => {
   try {
+    // Verifica che l'offerta abbia totalAmount definito
+    if (typeof offer.totalAmount === 'undefined' || offer.totalAmount === null) {
+      logger.debug(`Nessun saldo disponibile per offerta ${offer._id}, pagamento completo richiesto`);
+      return {
+        originalAmount: 0,
+        balanceUsed: 0,
+        amountToPay: 0,
+        remainingBalance: buyer.balance
+      };
+    }
+    
     logger.info(`Gestione pagamento con saldo per offerta ${offer._id}`, {
       offerId: offer._id,
       buyerId: buyer.userId,
@@ -232,7 +243,7 @@ const sendPaymentRequest = async (offer, paymentInfo) => {
     });
     
     // Verifica che offer.totalAmount sia definito
-    if (offer.totalAmount === undefined || offer.totalAmount === null) {
+    if (typeof offer.totalAmount === 'undefined' || offer.totalAmount === null) {
       logger.error(`Errore: totalAmount non definito nell'offerta ${offer._id}`);
       throw new Error("L'importo totale dell'offerta non è definito");
     }
