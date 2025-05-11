@@ -649,14 +649,17 @@ const confirmPaymentRequestCallback = async (ctx) => {
     // Aggiorna l'offerta con l'importo totale e lo stato
     await offerService.updateOfferStatus(offerId, 'payment_pending', { totalAmount: totalAmount });
     
+    // Recupera l'offerta aggiornata per avere il totalAmount salvato
+    const updatedOffer = await Offer.findById(offerId);
+    
     // Recupera l'acquirente
-    const buyer = await User.findOne({ userId: offer.buyerId });
+    const buyer = await User.findOne({ userId: updatedOffer.buyerId });
     
     // Gestisci il pagamento con saldo
-    const paymentInfo = await paymentService.handlePaymentWithBalance(offer, buyer);
+    const paymentInfo = await paymentService.handlePaymentWithBalance(updatedOffer, buyer);
     
     // Invia la richiesta di pagamento all'acquirente
-    await paymentService.sendPaymentRequest(offer, paymentInfo);
+    await paymentService.sendPaymentRequest(updatedOffer, paymentInfo);
     
     await ctx.reply(`✅ Richiesta di pagamento di ${totalAmount.toFixed(2)}€ inviata all'acquirente. Riceverai una notifica quando effettuerà il pagamento.`);
   } catch (err) {
