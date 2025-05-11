@@ -10,6 +10,7 @@ const Offer = require('../models/offer');
 const User = require('../models/user');
 const moment = require('moment');
 const logger = require('../utils/logger');
+const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
 
 // Handler per selezionare il tipo di corrente
 const connectorTypeCallback = async (ctx) => {
@@ -761,9 +762,25 @@ Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback al
     await offerService.notifyUserAboutOfferUpdate(offer, offer.buyerId, buyerMessage);
     
     // Richiedi al venditore di fare una donazione allo sviluppatore
-    const adminId = 123456789; // Sostituisci con il tuo ID Telegram
-    
-    await ctx.reply(`
+    // Usa l'admin ID dalle configurazioni
+    const { ADMIN_USER_ID } = require('../config/admin');
+
+    if (!ADMIN_USER_ID) {
+      logger.warn('ADMIN_USER_ID non configurato, non possibile mostrare opzioni di donazione');
+      
+      // Messaggio senza richiesta di donazione
+      await ctx.reply(`
+✅ *Transazione completata* ✅
+
+Hai confermato di aver ricevuto il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
+
+Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback all'acquirente utilizzando il comando /le_mie_ricariche.
+`, {
+        parse_mode: 'Markdown'
+      });
+    } else {
+      // Messaggio con richiesta di donazione
+      await ctx.reply(`
 ✅ *Transazione completata* ✅
 
 Hai confermato di aver ricevuto il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
@@ -772,17 +789,18 @@ Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback al
 
 🙏 Ti piacerebbe fare una donazione allo sviluppatore del bot? Questo aiuta a mantenere e migliorare il servizio.
 `, {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '🎁 Dona 2 kWh', callback_data: `donate_2_${offerId}` },
-            { text: '🎁 Altra quantità', callback_data: `donate_custom_${offerId}` }
-          ],
-          [{ text: '👍 No, grazie', callback_data: `donate_skip_${offerId}` }]
-        ]
-      }
-    });
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🎁 Dona 2 kWh', callback_data: `donate_2_${offerId}` },
+              { text: '🎁 Altra quantità', callback_data: `donate_custom_${offerId}` }
+            ],
+            [{ text: '👍 No, grazie', callback_data: `donate_skip_${offerId}` }]
+          ]
+        }
+      });
+    }
   } catch (err) {
     console.error('Errore nella conferma del pagamento:', err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
@@ -884,15 +902,36 @@ const donateFixedCallback = async (ctx) => {
       return;
     }
     
-    // Crea una nuova donazione
-    const adminId = 123456789; // Sostituisci con il tuo ID Telegram
+    // Usa l'ID admin dalle configurazioni invece di hardcodarlo
+    const { ADMIN_USER_ID } = require('../config/admin');
+    
+    // Se l'admin ID non è configurato, avvisa l'utente
+    if (!ADMIN_USER_ID) {
+      logger.error('ADMIN_USER_ID non configurato nelle variabili d\'ambiente');
+      await ctx.reply('❌ Impossibile elaborare la donazione: configurazione amministratore mancante. Contatta il supporto.');
+      return;
+    }
     
     // Recupera gli utenti
     const seller = await User.findOne({ userId: offer.sellerId });
-    const admin = await User.findOne({ userId: adminId });
+    
+    // Verifica se l'utente admin esiste
+    const adminExists = await User.findOne({ userId: ADMIN_USER_ID });
+    if (!adminExists) {
+      logger.error(`Admin con ID ${ADMIN_USER_ID} non registrato nel sistema. Creazione account admin automatica.`);
+      // Crea automaticamente l'account admin se non esiste
+      const newAdmin = new User({
+        userId: ADMIN_USER_ID,
+        username: 'admin',
+        firstName: 'Administrator',
+        balance: 0
+      });
+      await newAdmin.save();
+      logger.info(`Account admin creato automaticamente con ID ${ADMIN_USER_ID}`);
+    }
     
     // Crea la donazione
-    const donation = await paymentService.createDonation(seller.userId, adminId, 2);
+    const donation = await paymentService.createDonation(seller.userId, ADMIN_USER_ID, 2);
     
     // Notifica all'utente
     await ctx.reply('🙏 *Grazie per la tua donazione di 2 kWh!*\n\nIl tuo contributo aiuta a mantenere e migliorare il servizio.', {
