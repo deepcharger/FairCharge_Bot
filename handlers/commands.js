@@ -492,7 +492,11 @@ const updateBotCommandsCommand = async (ctx) => {
       { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' },
       { command: 'cancella_dati_utente', description: 'Cancella i dati di un utente (solo admin)' },
       { command: 'aggiungi_feedback', description: 'Aggiungi feedback a un utente (solo admin)' },
-      { command: 'db_admin', description: 'Gestione database (solo admin)' }
+      { command: 'db_admin', description: 'Gestione database (solo admin)' },
+      // Aggiungi i nuovi comandi admin
+      { command: 'check_admin_config', description: 'Verifica configurazione admin (solo admin)' },
+      { command: 'create_admin_account', description: 'Crea account admin (solo admin)' },
+      { command: 'system_checkup', description: 'Controllo di sistema (solo admin)' }
     ];
     
     // Imposta i comandi per gli utenti normali
@@ -1321,6 +1325,250 @@ const dbResetConfirmationHandler = async (ctx) => {
   return false; // Permette ad altri handler di gestire questo messaggio
 };
 
+/**
+ * Verifica e mostra le informazioni sulla configurazione admin (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const checkAdminConfigCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /check_admin_config ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che l'utente sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      logger.warn(`Tentativo non autorizzato di usare /check_admin_config da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Recupera l'ID admin dalle configurazioni
+    const adminId = ADMIN_USER_ID;
+    
+    // Cerca l'admin nel database
+    const admin = await User.findOne({ userId: adminId });
+    
+    // Prepara il messaggio di risposta
+    let responseMessage = `
+📊 *Configurazione Admin*
+
+Admin ID configurato: \`${adminId}\`
+Admin trovato nel DB: ${admin ? '✅' : '❌'}
+`;
+
+    if (admin) {
+      responseMessage += `
+*Dettagli account admin:*
+Username: ${admin.username ? '@' + admin.username : 'Non impostato'}
+Nome: ${admin.firstName || 'Non impostato'}
+Saldo: ${admin.balance.toFixed(2)} kWh
+Registrato il: ${admin.registrationDate.toLocaleDateString('it-IT')}
+`;
+    } else {
+      responseMessage += `
+⚠️ *Admin non trovato nel database*
+Se vuoi creare automaticamente l'account admin, usa il comando:
+/create_admin_account
+`;
+    }
+    
+    await ctx.reply(responseMessage, {
+      parse_mode: 'Markdown'
+    });
+    
+  } catch (err) {
+    logger.error('Errore nel comando check_admin_config:', err);
+    await ctx.reply('❌ Si è verificato un errore durante la verifica della configurazione admin.');
+  }
+};
+
+/**
+ * Crea automaticamente l'account admin se non esiste (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const createAdminAccountCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /create_admin_account ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che l'utente sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      logger.warn(`Tentativo non autorizzato di usare /create_admin_account da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Recupera l'ID admin dalle configurazioni
+    const adminId = ADMIN_USER_ID;
+    
+    // Verifica che l'ID admin sia configurato
+    if (!adminId) {
+      await ctx.reply('❌ ID Admin non configurato nelle variabili d\'ambiente. Contatta lo sviluppatore.');
+      return;
+    }
+    
+    // Cerca l'admin nel database
+    let admin = await User.findOne({ userId: adminId });
+    
+    // Se l'admin esiste già, informa l'utente
+    if (admin) {
+      await ctx.reply(`✅ Account admin già esistente (ID: ${adminId}).
+      
+Username: ${admin.username ? '@' + admin.username : 'Non impostato'}
+Nome: ${admin.firstName || 'Non impostato'}
+Saldo: ${admin.balance.toFixed(2)} kWh`);
+      return;
+    }
+    
+    // Crea l'account admin
+    admin = new User({
+      userId: adminId,
+      username: ctx.from.username,
+      firstName: 'Administrator',
+      lastName: 'Bot',
+      balance: 0,
+      registrationDate: new Date(),
+      positiveRatings: 0,
+      totalRatings: 0
+    });
+    
+    await admin.save();
+    
+    await ctx.reply(`✅ Account admin creato con successo!
+    
+ID: ${adminId}
+Username: ${admin.username ? '@' + admin.username : 'Non impostato'}
+Nome: ${admin.firstName} ${admin.lastName || ''}
+Saldo: ${admin.balance.toFixed(2)} kWh`);
+    
+  } catch (err) {
+    logger.error('Errore nel comando create_admin_account:', err);
+    await ctx.reply('❌ Si è verificato un errore durante la creazione dell\'account admin.');
+  }
+};
+
+/**
+ * Verifica e aggiusta i problemi comuni nel sistema (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const systemCheckupCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /system_checkup ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che l'utente sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      logger.warn(`Tentativo non autorizzato di usare /system_checkup da parte di ${ctx.from.id}`);
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    await ctx.reply('🔄 Avvio controllo di sistema...');
+    
+    // Messaggio iniziale
+    let reportMsg = await ctx.reply('⏳ Controllo configurazione...');
+    
+    // 1. Verifica configurazione
+    const adminId = ADMIN_USER_ID;
+    let issues = 0;
+    let fixes = 0;
+    
+    // Lista dei problemi trovati
+    let problemsList = [];
+    
+    if (!adminId) {
+      issues++;
+      problemsList.push('❌ ID Admin non configurato nelle variabili d\'ambiente');
+    }
+    
+    // Aggiorna il messaggio
+    await bot.telegram.editMessageText(
+      ctx.chat.id, 
+      reportMsg.message_id, 
+      undefined, 
+      '⏳ Controllo account admin...'
+    );
+    
+    // 2. Verifica account admin
+    const admin = await User.findOne({ userId: adminId });
+    
+    if (!admin && adminId) {
+      issues++;
+      problemsList.push('❌ Account admin non trovato nel database');
+      
+      // Crea automaticamente l'account admin se non esiste
+      try {
+        const newAdmin = new User({
+          userId: adminId,
+          username: 'admin',
+          firstName: 'Administrator',
+          balance: 0,
+          registrationDate: new Date()
+        });
+        
+        await newAdmin.save();
+        fixes++;
+        problemsList.push('✅ Account admin creato automaticamente');
+      } catch (err) {
+        problemsList.push(`❌ Errore nella creazione dell'account admin: ${err.message}`);
+      }
+    }
+    
+    // Aggiorna il messaggio
+    await bot.telegram.editMessageText(
+      ctx.chat.id, 
+      reportMsg.message_id, 
+      undefined, 
+      '⏳ Controllo integrità database...'
+    );
+    
+    // 3. Verifica donazioni
+    const donationsCount = await Donation.countDocuments({ adminId });
+    
+    // 4. Prepara il report finale
+    let reportText = `
+📊 *Report controllo di sistema*
+
+Problemi trovati: ${issues}
+Problemi risolti: ${fixes}
+`;
+
+    if (problemsList.length > 0) {
+      reportText += `
+*Dettagli:*
+${problemsList.join('\n')}
+`;
+    }
+    
+    reportText += `
+*Statistiche sistema:*
+- Account admin: ${admin ? '✅' : '❌'}
+${admin ? `- Saldo admin: ${admin.balance.toFixed(2)} kWh` : ''}
+- Donazioni ricevute: ${donationsCount}
+
+Sistema ${issues === 0 ? '✅ in buono stato' : issues === fixes ? '⚠️ riparato' : '❌ necessita attenzione'}
+`;
+    
+    // Invia il report finale
+    await bot.telegram.editMessageText(
+      ctx.chat.id, 
+      reportMsg.message_id, 
+      undefined, 
+      reportText,
+      { parse_mode: 'Markdown' }
+    );
+    
+  } catch (err) {
+    logger.error('Errore nel comando system_checkup:', err);
+    await ctx.reply('❌ Si è verificato un errore durante il controllo di sistema.');
+  }
+};
+
 module.exports = {
   startCommand,
   sellKwhCommand,
@@ -1335,5 +1583,8 @@ module.exports = {
   addFeedbackCommand,
   deleteUserDataHandler,
   dbAdminCommand,
-  dbResetConfirmationHandler
+  dbResetConfirmationHandler,
+  checkAdminConfigCommand,
+  createAdminAccountCommand,
+  systemCheckupCommand
 };
