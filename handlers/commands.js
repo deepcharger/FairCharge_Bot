@@ -3,6 +3,7 @@ const { Markup } = require('telegraf');
 const userService = require('../services/userService');
 const offerService = require('../services/offerService');
 const announcementService = require('../services/announcementService');
+const walletService = require('../services/walletService');
 const { formatUserProfile, formatOfferListItem, formatWelcomeMessage } = require('../utils/formatters');
 const User = require('../models/user');
 const Offer = require('../models/offer');
@@ -481,6 +482,8 @@ const updateBotCommandsCommand = async (ctx) => {
       { command: 'vendi_kwh', description: 'Crea un annuncio per vendere kWh' },
       { command: 'le_mie_ricariche', description: 'Visualizza le tue ricariche attive' },
       { command: 'profilo', description: 'Visualizza il tuo profilo' },
+      { command: 'portafoglio', description: 'Visualizza il tuo portafoglio' },
+      { command: 'portafoglio_partner', description: 'Dettagli portafoglio con un partner' },
       { command: 'archivia_annuncio', description: 'Archivia il tuo annuncio attivo' },
       { command: 'annulla', description: 'Annulla la procedura in corso' }
     ];
@@ -489,6 +492,8 @@ const updateBotCommandsCommand = async (ctx) => {
     const adminCommands = [
       ...userCommands,
       { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
+      { command: 'le_mie_donazioni', description: 'Visualizza le donazioni ricevute (solo admin)' },
+      { command: 'portafoglio_venditore', description: 'Dettagli portafoglio con un venditore (solo admin)' },
       { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' },
       { command: 'cancella_dati_utente', description: 'Cancella i dati di un utente (solo admin)' },
       { command: 'aggiungi_feedback', description: 'Aggiungi feedback a un utente (solo admin)' },
@@ -588,6 +593,373 @@ const archiveAnnouncementCommand = async (ctx) => {
   } catch (err) {
     logger.error(`Errore nell'archiviazione dell'annuncio per l'utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore durante l\'archiviazione dell\'annuncio. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Gestisce il comando /portafoglio (per tutti gli utenti)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const walletCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /portafoglio ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Recupera il riepilogo del portafoglio
+    const walletService = require('../services/walletService');
+    const walletSummary = await walletService.getUserWalletSummary(ctx.from.id);
+    
+    // Prepara il messaggio con le statistiche
+    let message = `💼 <b>Il tuo portafoglio</b>\n\n`;
+    
+    // Riepilogo generale
+    message += `<b>Riepilogo transazioni:</b>\n`;
+    message += `- <b>kWh acquistati:</b> ${walletSummary.totals.totalKwhBought.toFixed(2)}\n`;
+    message += `- <b>kWh venduti:</b> ${walletSummary.totals.totalKwhSold.toFixed(2)}\n`;
+    message += `- <b>Spesa totale:</b> ${walletSummary.totals.amountSpent.toFixed(2)}€\n`;
+    message += `- <b>Guadagno totale:</b> ${walletSummary.totals.amountEarned.toFixed(2)}€\n`;
+    message += `- <b>Saldo attuale:</b> ${walletSummary.totals.currentBalance.toFixed(2)} kWh\n`;
+    
+    // Per l'admin, mostra anche i crediti donati
+    if (isAdmin(ctx.from.id)) {
+      message += `- <b>Crediti ricevuti disponibili:</b> ${walletSummary.totals.totalReceivedKwh.toFixed(2)} kWh\n`;
+      message += `\n<i>Usa /le_mie_donazioni per vedere i dettagli dei crediti ricevuti</i>\n`;
+    } 
+    // Per i venditori, mostra i crediti donati all'admin
+    else if (walletSummary.totals.totalDonatedKwh > 0) {
+      message += `- <b>kWh donati all'admin:</b> ${walletSummary.totals.totalDonatedKwh.toFixed(2)}\n`;
+    }
+    
+    // Resoconto transazioni
+    message += `\n<b>Stato transazioni:</b>\n`;
+    message += `- <b>Completate:</b> ${walletSummary.totals.successfulTransactions}\n`;
+    message += `- <b>In corso:</b> ${walletSummary.totals.pendingTransactions}\n`;
+    message += `- <b>Annullate:</b> ${walletSummary.totals.canceledTransactions}\n`;
+    
+    // Partners con cui si è interagito
+    const partners = Object.values(walletSummary.partners);
+    
+    if (partners.length > 0) {
+      message += `\n<b>I tuoi partner (${partners.length}):</b>\n`;
+      
+      // Mostra i primi 5 partner (ordinati per numero di transazioni)
+      const topPartners = [...partners]
+        .sort((a, b) => b.totalTransactions - a.totalTransactions)
+        .slice(0, 5);
+      
+      for (const partner of topPartners) {
+        const partnerName = partner.partnerInfo?.username 
+          ? '@' + partner.partnerInfo.username 
+          : (partner.partnerInfo?.firstName || `Partner ${partner.partnerId}`);
+        
+        message += `- <b>${partnerName}</b>: ${partner.totalTransactions} transazioni`;
+        
+        // Per l'admin mostra anche quanti crediti sono disponibili per ogni venditore
+        if (isAdmin(ctx.from.id) && partner.donations && partner.donations.length > 0) {
+          const availableCredits = partner.donations.reduce((total, d) => total + (d.isUsed ? 0 : d.kwhAmount), 0);
+          if (availableCredits > 0) {
+            message += `, ${availableCredits.toFixed(2)} kWh disponibili`;
+          }
+        }
+        
+        message += `\n`;
+      }
+      
+      // Se ci sono più di 5 partner
+      if (partners.length > 5) {
+        message += `<i>...e altri ${partners.length - 5} partner</i>\n`;
+      }
+      
+      // Aggiungere istruzioni per visualizzare i dettagli
+      message += `\nPer vedere i dettagli di un partner specifico, usa:\n/portafoglio_partner ID_PARTNER`;
+    } else {
+      message += `\n<i>Non hai ancora interagito con altri utenti.</i>`;
+    }
+    
+    await ctx.reply(message, { parse_mode: 'HTML' });
+    
+  } catch (err) {
+    logger.error(`Errore nel recupero del portafoglio per utente ${ctx.from.id}:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Gestisce il comando /portafoglio_partner (per tutti gli utenti)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const partnerWalletCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /portafoglio_partner ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      text: ctx.message.text
+    });
+    
+    // Estrai l'ID del partner
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 2) {
+      await ctx.reply('⚠️ Formato corretto: /portafoglio_partner ID_PARTNER\n\nPer vedere l\'elenco dei partner, usa /portafoglio');
+      return;
+    }
+    
+    const partnerId = parseInt(parts[1]);
+    if (isNaN(partnerId)) {
+      await ctx.reply('❌ ID partner non valido. Deve essere un numero.');
+      return;
+    }
+    
+    // Recupera i dettagli del portafoglio con questo partner
+    const walletService = require('../services/walletService');
+    const detail = await walletService.getPartnerWalletDetail(ctx.from.id, partnerId);
+    
+    // Recupera info sul partner
+    const User = require('../models/user');
+    const partner = await User.findOne({ userId: partnerId });
+    
+    if (!partner) {
+      await ctx.reply(`❌ Partner con ID ${partnerId} non trovato.`);
+      return;
+    }
+    
+    // Crea il messaggio con i dettagli
+    let message = `📊 <b>Portafoglio con ${partner.username ? '@' + partner.username : partner.firstName}</b>\n\n`;
+    
+    // Statistiche principali
+    message += `<b>Statistiche:</b>\n`;
+    message += `- <b>kWh acquistati:</b> ${detail.partnerDetail.totalKwhBought.toFixed(2)}\n`;
+    message += `- <b>kWh venduti:</b> ${detail.partnerDetail.totalKwhSold.toFixed(2)}\n`;
+    message += `- <b>Spesa totale:</b> ${detail.partnerDetail.amountSpent.toFixed(2)}€\n`;
+    message += `- <b>Guadagno totale:</b> ${detail.partnerDetail.amountEarned.toFixed(2)}€\n`;
+    message += `- <b>Transazioni completate:</b> ${detail.partnerDetail.successfulTransactions}\n`;
+    message += `- <b>Transazioni in corso:</b> ${detail.partnerDetail.pendingTransactions}\n`;
+    
+    // Se l'utente è l'admin e questo è un venditore, mostra le donazioni
+    if (isAdmin(ctx.from.id) && detail.partnerDetail.donationsDetail) {
+      const donationsDetail = detail.partnerDetail.donationsDetail;
+      
+      message += `\n<b>Riepilogo donazioni:</b>\n`;
+      message += `- <b>Totale donato:</b> ${donationsDetail.totalDonations.toFixed(2)} kWh\n`;
+      message += `- <b>Disponibili:</b> ${donationsDetail.availableDonations.toFixed(2)} kWh\n`;
+      message += `- <b>Utilizzati:</b> ${donationsDetail.usedDonations.toFixed(2)} kWh\n`;
+      
+      if (donationsDetail.availableDonations > 0) {
+        message += `\n✅ Hai ${donationsDetail.availableDonations.toFixed(2)} kWh disponibili per future ricariche con questo venditore.`;
+      }
+    }
+    
+    // Ultime transazioni
+    if (detail.partnerDetail.transactions && detail.partnerDetail.transactions.length > 0) {
+      message += `\n\n<b>Ultime transazioni:</b>\n`;
+      
+      // Mostra le ultime 3 transazioni
+      const recentTransactions = detail.partnerDetail.transactions
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 3);
+      
+      for (const tx of recentTransactions) {
+        const date = tx.createdAt.toLocaleDateString('it-IT');
+        const isUserBuyer = tx.buyerId === ctx.from.id;
+        const role = isUserBuyer ? "Acquisto" : "Vendita";
+        
+        message += `- ${date}: ${role} di ${tx.kwhAmount.toFixed(2)} kWh (${tx.totalAmount.toFixed(2)}€)\n`;
+      }
+      
+      // Se ci sono più di 3 transazioni
+      if (detail.partnerDetail.transactions.length > 3) {
+        message += `<i>...e altre ${detail.partnerDetail.transactions.length - 3} transazioni</i>\n`;
+      }
+    } else {
+      message += `\n<i>Non ci sono transazioni completate con questo partner</i>\n`;
+    }
+    
+    // Offerte in corso
+    const pendingOffers = detail.partnerDetail.offers.filter(o => 
+      o.status !== 'completed' && 
+      o.status !== 'cancelled' && 
+      o.status !== 'rejected'
+    );
+    
+    if (pendingOffers.length > 0) {
+      message += `\n<b>Ricariche in corso:</b> ${pendingOffers.length}\n`;
+      message += `<i>Usa /le_mie_ricariche per gestire le ricariche in corso</i>\n`;
+    }
+    
+    await ctx.reply(message, { parse_mode: 'HTML' });
+    
+  } catch (err) {
+    logger.error(`Errore nel recupero dei dettagli del portafoglio con partner ${ctx.message?.text}:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Gestisce il comando /le_mie_donazioni (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const myDonationsCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /le_mie_donazioni ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Recupera le statistiche delle donazioni
+    const walletService = require('../services/walletService');
+    const stats = await walletService.getAdminDonationStats(ctx.from.id);
+    
+    if (stats.totalVendors === 0) {
+      await ctx.reply('Non hai ancora ricevuto donazioni.');
+      return;
+    }
+    
+    // Crea il messaggio con le statistiche
+    let message = `📊 <b>I tuoi crediti per venditore</b>\n\n`;
+    message += `<b>Riepilogo totale:</b>\n`;
+    message += `- <b>Crediti totali ricevuti:</b> ${stats.totalDonated.toFixed(2)} kWh\n`;
+    message += `- <b>Crediti disponibili:</b> ${stats.totalAvailable.toFixed(2)} kWh\n`;
+    message += `- <b>Crediti utilizzati:</b> ${stats.totalUsed.toFixed(2)} kWh\n`;
+    message += `- <b>Venditori donatori:</b> ${stats.totalVendors}\n\n`;
+    
+    message += `<b>Dettaglio per venditore:</b>\n`;
+    
+    // Aggiungi dettagli per ogni venditore (massimo 10 per non superare i limiti di Telegram)
+    const topVendors = stats.vendorSummary.slice(0, 10);
+    
+    for (const vendor of topVendors) {
+      const vendorName = vendor.vendorInfo.username ? 
+        '@' + vendor.vendorInfo.username : 
+        vendor.vendorInfo.firstName;
+      
+      message += `\n<b>${vendorName}</b> (ID: ${vendor._id}):\n`;
+      message += `- <b>Disponibili:</b> ${vendor.availableAmount.toFixed(2)} kWh\n`;
+      message += `- <b>Utilizzati:</b> ${vendor.usedAmount.toFixed(2)} kWh\n`;
+      message += `- <b>Totale donato:</b> ${vendor.totalDonated.toFixed(2)} kWh\n`;
+      message += `- <b>Ultima donazione:</b> ${vendor.lastDonation.toLocaleDateString('it-IT')}\n`;
+    }
+    
+    // Se ci sono più di 10 venditori, aggiungi una nota
+    if (stats.vendorSummary.length > 10) {
+      message += `\n<i>...e altri ${stats.vendorSummary.length - 10} venditori</i>`;
+    }
+    
+    // Aggiungi note finali
+    message += `\n\nPer vedere dettagli specifici su un venditore, usa:\n/portafoglio_venditore ID_VENDITORE`;
+    
+    await ctx.reply(message, { parse_mode: 'HTML' });
+    
+  } catch (err) {
+    logger.error('Errore nel recupero delle donazioni:', err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+  }
+};
+
+/**
+ * Gestisce il comando /portafoglio_venditore (solo per admin)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const vendorWalletCommand = async (ctx) => {
+  try {
+    logger.info(`Comando /portafoglio_venditore ricevuto da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      text: ctx.message.text
+    });
+    
+    // Verifica che sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      return;
+    }
+    
+    // Estrai l'ID del venditore
+    const parts = ctx.message.text.split(' ');
+    if (parts.length < 2) {
+      await ctx.reply('⚠️ Formato corretto: /portafoglio_venditore ID_VENDITORE\n\nPer vedere l\'elenco dei venditori, usa /le_mie_donazioni');
+      return;
+    }
+    
+    const vendorId = parseInt(parts[1]);
+    if (isNaN(vendorId)) {
+      await ctx.reply('❌ ID venditore non valido. Deve essere un numero.');
+      return;
+    }
+    
+    // Recupera i dettagli del portafoglio con questo venditore
+    const walletService = require('../services/walletService');
+    const detail = await walletService.getPartnerWalletDetail(ctx.from.id, vendorId);
+    
+    // Recupera info sul venditore
+    const User = require('../models/user');
+    const vendor = await User.findOne({ userId: vendorId });
+    
+    if (!vendor) {
+      await ctx.reply(`❌ Venditore con ID ${vendorId} non trovato.`);
+      return;
+    }
+    
+    // Ottieni le donazioni
+    const donationsDetail = detail.partnerDetail.donationsDetail;
+    
+    // Crea il messaggio con i dettagli
+    let message = `📊 <b>Portafoglio con ${vendor.username ? '@' + vendor.username : vendor.firstName}</b>\n\n`;
+    
+    // Riepilogo transazioni
+    message += `<b>Riepilogo transazioni:</b>\n`;
+    message += `- <b>kWh acquistati:</b> ${detail.partnerDetail.totalKwhBought.toFixed(2)}\n`;
+    message += `- <b>Importo speso:</b> ${detail.partnerDetail.amountSpent.toFixed(2)}€\n`;
+    message += `- <b>Transazioni completate:</b> ${detail.partnerDetail.successfulTransactions}\n`;
+    
+    // Riepilogo donazioni
+    message += `\n<b>Riepilogo donazioni:</b>\n`;
+    message += `- <b>Totale donato:</b> ${donationsDetail.totalDonations.toFixed(2)} kWh\n`;
+    message += `- <b>Disponibili:</b> ${donationsDetail.availableDonations.toFixed(2)} kWh\n`;
+    message += `- <b>Utilizzati:</b> ${donationsDetail.usedDonations.toFixed(2)} kWh\n`;
+    
+    // Ultime donazioni disponibili
+    if (donationsDetail.donationsList && donationsDetail.donationsList.length > 0) {
+      message += `\n<b>Ultime donazioni disponibili:</b>\n`;
+      
+      // Mostra le ultime 5 donazioni disponibili
+      const recentDonations = donationsDetail.donationsList
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 5);
+      
+      for (const donation of recentDonations) {
+        const date = donation.createdAt.toLocaleDateString('it-IT');
+        message += `- ${date}: ${donation.kwhAmount.toFixed(2)} kWh\n`;
+      }
+      
+      // Se ci sono più di 5 donazioni, aggiungi una nota
+      if (donationsDetail.donationsList.length > 5) {
+        message += `\n<i>...e altre ${donationsDetail.donationsList.length - 5} donazioni</i>\n`;
+      }
+    } else {
+      message += `\n<i>Non ci sono donazioni disponibili da questo venditore</i>\n`;
+    }
+    
+    // Aggiungi info sul prossimo pagamento
+    message += `\n<b>Informazioni pagamento:</b>\n`;
+    if (donationsDetail.availableDonations > 0) {
+      message += `✅ Hai ${donationsDetail.availableDonations.toFixed(2)} kWh disponibili per future ricariche con questo venditore.\n`;
+      message += `Quando avvierai una ricarica con questo venditore, il sistema utilizzerà automaticamente questi kWh donati.`;
+    } else {
+      message += `❌ Non hai kWh disponibili da questo venditore. Dovrai pagare l'intero importo per le prossime ricariche.`;
+    }
+    
+    await ctx.reply(message, { parse_mode: 'HTML' });
+    
+  } catch (err) {
+    logger.error(`Errore nel recupero dei dettagli del portafoglio con venditore ${ctx.message?.text}:`, err);
+    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
 
@@ -1586,5 +1958,9 @@ module.exports = {
   dbResetConfirmationHandler,
   checkAdminConfigCommand,
   createAdminAccountCommand,
-  systemCheckupCommand
+  systemCheckupCommand,
+  walletCommand,
+  partnerWalletCommand,
+  myDonationsCommand,
+  vendorWalletCommand
 };
