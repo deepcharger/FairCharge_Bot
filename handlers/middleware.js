@@ -9,6 +9,7 @@ const Offer = require('../models/offer');
 const User = require('../models/user');
 const moment = require('moment');
 const logger = require('../utils/logger');
+const { ADMIN_USER_ID } = require('../config/admin');
 
 /**
  * Middleware per la gestione della sessione
@@ -585,12 +586,37 @@ ${buyerName} ha annullato la ricarica prevista per il ${moment(offer.date).forma
         return;
       }
       
+      // Usa l'ID admin dalle configurazioni
+      const { ADMIN_USER_ID } = require('../config/admin');
+      
+      // Se l'admin ID non è configurato, avvisa l'utente
+      if (!ADMIN_USER_ID) {
+        logger.error('ADMIN_USER_ID non configurato nelle variabili d\'ambiente');
+        await ctx.reply('❌ Impossibile elaborare la donazione: configurazione amministratore mancante. Contatta il supporto.');
+        delete ctx.session.donateCustomOfferId;
+        return;
+      }
+      
       // Recupera gli utenti
       const seller = await User.findOne({ userId: offer.sellerId });
-      const adminId = require('../config/admin').ADMIN_USER_ID;
+      
+      // Verifica se l'utente admin esiste
+      const adminExists = await User.findOne({ userId: ADMIN_USER_ID });
+      if (!adminExists) {
+        logger.warn(`Admin con ID ${ADMIN_USER_ID} non registrato nel sistema. Creazione account admin automatica.`);
+        // Crea automaticamente l'account admin se non esiste
+        const newAdmin = new User({
+          userId: ADMIN_USER_ID,
+          username: 'admin',
+          firstName: 'Administrator',
+          balance: 0
+        });
+        await newAdmin.save();
+        logger.info(`Account admin creato automaticamente con ID ${ADMIN_USER_ID}`);
+      }
       
       // Crea la donazione
-      const donation = await paymentService.createDonation(seller.userId, adminId, kwh);
+      const donation = await paymentService.createDonation(seller.userId, ADMIN_USER_ID, kwh);
       
       // Notifica all'utente
       await ctx.reply(`🙏 *Grazie per la tua donazione di ${kwh} kWh!*\n\nIl tuo contributo aiuta a mantenere e migliorare il servizio.`, {
