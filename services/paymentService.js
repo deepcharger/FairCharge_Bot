@@ -2,10 +2,11 @@
 const Transaction = require('../models/transaction');
 const User = require('../models/user');
 const Donation = require('../models/donation');
+const Offer = require('../models/offer');
 const { bot } = require('../config/bot');
 const { Markup } = require('telegraf');
 const logger = require('../utils/logger');
-const { ADMIN_USER_ID } = require('../config/admin');
+const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
 
 /**
  * Crea una nuova transazione
@@ -65,7 +66,7 @@ const createTransaction = async (offer) => {
 };
 
 /**
- * Gestisce il pagamento utilizzando il saldo dell'utente se disponibile
+ * Gestisce il pagamento utilizzando il saldo dell'utente o le donazioni se è l'admin
  * @param {Object} offer - L'offerta da pagare
  * @param {Object} buyer - L'acquirente
  * @returns {Promise<Object>} Oggetto con informazioni sul pagamento
@@ -74,53 +75,140 @@ const handlePaymentWithBalance = async (offer, buyer) => {
   try {
     // Verifica che l'offerta abbia totalAmount definito
     if (typeof offer.totalAmount === 'undefined' || offer.totalAmount === null) {
-      logger.debug(`Nessun saldo disponibile per offerta ${offer._id}, pagamento completo richiesto`);
+      logger.debug(`Nessun totalAmount definito per offerta ${offer._id}, pagamento completo richiesto`);
       return {
         originalAmount: 0,
         balanceUsed: 0,
         amountToPay: 0,
-        remainingBalance: buyer.balance
+        remainingBalance: buyer.balance,
+        donationsUsed: []
       };
     }
     
-    logger.info(`Gestione pagamento con saldo per offerta ${offer._id}`, {
+    // Verifica se l'acquirente è l'admin
+    const { isAdmin } = require('../config/admin');
+    const isAdminBuyer = isAdmin(buyer.userId);
+    
+    logger.info(`Gestione pagamento per offerta ${offer._id}`, {
       offerId: offer._id,
       buyerId: buyer.userId,
+      isAdmin: isAdminBuyer,
       totalAmount: offer.totalAmount,
-      currentBalance: buyer.balance
+      kwhAmount: offer.kwhCharged
     });
     
-    let balance = buyer.balance;
-    let amountToPay = offer.totalAmount;
-    let balanceUsed = 0;
-    
-    // Se l'utente ha un saldo positivo, utilizzalo
-    if (balance > 0) {
-      balanceUsed = Math.min(balance, offer.totalAmount);
-      amountToPay = Math.max(0, offer.totalAmount - balanceUsed);
+    // Se è l'admin, usiamo le donazioni da questo venditore specifico
+    if (isAdminBuyer) {
+      // Trova le donazioni non utilizzate provenienti dal venditore specifico
+      const availableDonations = await Donation.findAvailableFromVendor(buyer.userId, offer.sellerId);
       
-      logger.debug(`Utilizzo saldo per offerta ${offer._id}`, {
-        balanceBefore: balance,
-        balanceUsed,
+      // Calcola i kWh totali disponibili per questo venditore
+      let availableKwh = 0;
+      for (const donation of availableDonations) {
+        availableKwh += donation.kwhAmount;
+      }
+      
+      logger.debug(`Amministratore ha ${availableKwh} kWh disponibili donati dal venditore ${offer.sellerId}`);
+      
+      // Utilizza i kWh donati fino a esaurimento
+      let kwhRemaining = offer.kwhCharged;
+      let donationsUsed = [];
+      
+      for (const donation of availableDonations) {
+        if (kwhRemaining <= 0) break;
+        
+        // Quanto possiamo usare da questa donazione
+        const kwhToUse = Math.min(donation.kwhAmount, kwhRemaining);
+        
+        if (kwhToUse > 0) {
+          // Aggiorna kwhRemaining
+          kwhRemaining -= kwhToUse;
+          
+          // Se usiamo tutta la donazione
+          if (kwhToUse === donation.kwhAmount) {
+            donation.isUsed = true;
+            donation.usedInOfferId = offer._id;
+            await donation.save();
+            donationsUsed.push(donation);
+          } 
+          // Se usiamo solo parte della donazione
+          else if (kwhToUse < donation.kwhAmount) {
+            // Marca questa donazione come parzialmente usata
+            donation.kwhAmount -= kwhToUse;
+            await donation.save();
+            
+            // Crea una nuova donazione "usata" per la parte consumata
+            const usedDonation = new Donation({
+              userId: donation.userId,
+              adminId: donation.adminId,
+              kwhAmount: kwhToUse,
+              isUsed: true,
+              usedInOfferId: offer._id,
+              createdAt: donation.createdAt
+            });
+            await usedDonation.save();
+            donationsUsed.push(usedDonation);
+          }
+        }
+      }
+      
+      // Calcola quanto abbiamo coperto con le donazioni
+      const kwhCovered = offer.kwhCharged - kwhRemaining;
+      const pricePerKwh = offer.totalAmount / offer.kwhCharged;
+      const amountCovered = kwhCovered * pricePerKwh;
+      const amountToPay = Math.max(0, offer.totalAmount - amountCovered);
+      
+      logger.info(`Admin ha utilizzato ${kwhCovered} kWh di donazioni dal venditore ${offer.sellerId}`, {
+        kwhCovered,
+        amountCovered,
         amountToPay,
-        balanceAfter: balance - balanceUsed
+        donationsUsed: donationsUsed.length
       });
       
-      // Aggiorna il saldo dell'utente
-      buyer.balance -= balanceUsed;
-      await buyer.save();
-    } else {
-      logger.debug(`Nessun saldo disponibile per offerta ${offer._id}, pagamento completo richiesto`);
+      return {
+        originalAmount: offer.totalAmount,
+        kwhCovered,
+        amountCovered,
+        amountToPay,
+        donationsUsed,
+        isAdmin: true
+      };
     }
-    
-    return {
-      originalAmount: offer.totalAmount,
-      balanceUsed,
-      amountToPay,
-      remainingBalance: buyer.balance
-    };
+    // Se è un utente normale, utilizziamo il saldo
+    else {
+      let balance = buyer.balance;
+      let amountToPay = offer.totalAmount;
+      let balanceUsed = 0;
+      
+      // Se l'utente ha un saldo positivo, utilizzalo
+      if (balance > 0) {
+        balanceUsed = Math.min(balance, offer.totalAmount);
+        amountToPay = Math.max(0, offer.totalAmount - balanceUsed);
+        
+        logger.debug(`Utilizzo saldo per offerta ${offer._id}`, {
+          balanceBefore: balance,
+          balanceUsed,
+          amountToPay,
+          balanceAfter: balance - balanceUsed
+        });
+        
+        // Aggiorna il saldo dell'utente
+        buyer.balance -= balanceUsed;
+        await buyer.save();
+      } else {
+        logger.debug(`Nessun saldo disponibile per offerta ${offer._id}, pagamento completo richiesto`);
+      }
+      
+      return {
+        originalAmount: offer.totalAmount,
+        balanceUsed,
+        amountToPay,
+        remainingBalance: buyer.balance,
+        donationsUsed: []
+      };
+    }
   } catch (err) {
-    logger.error(`Errore nella gestione del pagamento con saldo per offerta ${offer._id}:`, err);
+    logger.error(`Errore nella gestione del pagamento per offerta ${offer._id}:`, err);
     throw err;
   }
 };
@@ -239,7 +327,8 @@ const sendPaymentRequest = async (offer, paymentInfo) => {
       offerId: offer._id,
       buyerId: offer.buyerId,
       totalAmount: offer.totalAmount,
-      balanceUsed: paymentInfo?.balanceUsed || 0
+      isAdmin: paymentInfo?.isAdmin || false,
+      donationsUsed: paymentInfo?.donationsUsed?.length || 0
     });
     
     // Verifica che offer.totalAmount sia definito
@@ -254,14 +343,95 @@ const sendPaymentRequest = async (offer, paymentInfo) => {
         originalAmount: offer.totalAmount,
         balanceUsed: 0,
         amountToPay: offer.totalAmount,
-        remainingBalance: 0
+        remainingBalance: 0,
+        donationsUsed: []
       };
     }
     
     // Calcola il prezzo per kWh
     const pricePerKwh = (offer.totalAmount / offer.kwhCharged).toFixed(2);
     
-    // Costruisci il messaggio di richiesta pagamento
+    // Se l'acquirente è l'admin che sta utilizzando donazioni
+    if (paymentInfo.isAdmin && paymentInfo.donationsUsed && paymentInfo.donationsUsed.length > 0) {
+      // Messaggio per l'admin
+      let adminMessage = `
+💰 <b>Utilizzo donazioni del venditore</b> 💰
+
+Hai utilizzato ${paymentInfo.kwhCovered.toFixed(2)} kWh donati dal venditore per questa ricarica.
+
+⚡ <b>kWh ricaricati:</b> ${offer.kwhCharged} kWh
+💸 <b>Importo coperto dalle donazioni:</b> ${paymentInfo.amountCovered.toFixed(2)}€
+`;
+
+      // Se c'è ancora un importo da pagare (donazioni insufficienti)
+      if (paymentInfo.amountToPay > 0) {
+        adminMessage += `\n💳 <b>Importo da pagare:</b> ${paymentInfo.amountToPay.toFixed(2)}€\n\nDevi effettuare un pagamento aggiuntivo per coprire l'importo rimanente.`;
+        
+        // Invia il messaggio all'admin con il bottone di conferma pagamento
+        await bot.telegram.sendMessage(offer.buyerId, adminMessage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '💸 Ho effettuato il pagamento', callback_data: `payment_sent_${offer._id}` }]
+            ]
+          }
+        });
+      } else {
+        adminMessage += `\n✅ <b>Pagamento completato</b> automaticamente utilizzando le donazioni del venditore.\n\nNon è necessario effettuare alcun pagamento aggiuntivo.`;
+        
+        // Aggiorna lo stato dell'offerta a pagamento inviato
+        const offerService = require('../services/offerService');
+        await offerService.updateOfferStatus(offer._id, 'payment_sent', { 
+          paymentMethod: 'Crediti donati dal venditore' 
+        });
+        
+        // Invia il messaggio all'admin senza bottoni
+        await bot.telegram.sendMessage(offer.buyerId, adminMessage, {
+          parse_mode: 'HTML'
+        });
+      }
+      
+      // Messaggio per il venditore
+      let sellerMessage = `
+💰 <b>Pagamento con crediti da te donati</b> 💰
+
+L'amministratore ha utilizzato ${paymentInfo.kwhCovered.toFixed(2)} kWh dai crediti che hai donato in precedenza.
+
+⚡ <b>kWh ricaricati:</b> ${offer.kwhCharged} kWh
+💸 <b>Importo coperto dai tuoi crediti:</b> ${paymentInfo.amountCovered.toFixed(2)}€
+`;
+      
+      // Se c'è ancora un importo da pagare
+      if (paymentInfo.amountToPay > 0) {
+        sellerMessage += `\n💳 <b>Importo da pagare:</b> ${paymentInfo.amountToPay.toFixed(2)}€\n\nL'amministratore deve effettuare un pagamento aggiuntivo per coprire l'importo rimanente.`;
+      } else {
+        sellerMessage += `\n✅ <b>Pagamento completato</b> automaticamente utilizzando i crediti che hai donato in precedenza.\n\nL'amministratore non deve effettuare alcun pagamento aggiuntivo.`;
+        
+        // Se il pagamento è già completato, invia il messaggio al venditore con i bottoni di conferma
+        await bot.telegram.sendMessage(offer.sellerId, sellerMessage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Confermo pagamento ricevuto', callback_data: `payment_confirmed_${offer._id}` },
+                { text: '❌ Non ho ricevuto', callback_data: `payment_not_received_${offer._id}` }
+              ]
+            ]
+          }
+        });
+      }
+      
+      // Se il pagamento non è completato automaticamente, invia solo il messaggio informativo
+      if (paymentInfo.amountToPay > 0) {
+        await bot.telegram.sendMessage(offer.sellerId, sellerMessage, {
+          parse_mode: 'HTML'
+        });
+      }
+      
+      return;
+    }
+    
+    // Per gli utenti normali o quando non ci sono donazioni, costruisci il messaggio standard
     let message = `
 💰 <b>Pagamento richiesto</b> 💰
 
@@ -272,12 +442,14 @@ Il venditore ha confermato la ricarica di ${offer.kwhCharged} kWh.
 
     // Aggiungi informazioni sul saldo se utilizzato
     if (paymentInfo.balanceUsed > 0) {
-      message += `\nHai utilizzato ${paymentInfo.balanceUsed.toFixed(2)} kWh dal tuo saldo.`;
+      const kwhUsed = offer.kwhCharged * (paymentInfo.balanceUsed / offer.totalAmount);
+      
+      message += `\n\n<b>Hai utilizzato ${kwhUsed.toFixed(2)} kWh (${paymentInfo.balanceUsed.toFixed(2)}€) dal tuo saldo.</b>`;
       
       if (paymentInfo.amountToPay > 0) {
-        message += `\nDopo aver utilizzato il tuo saldo, devi pagare ancora ${paymentInfo.amountToPay.toFixed(2)}€.`;
+        message += `\nDopo aver utilizzato il tuo saldo, devi pagare ancora <b>${paymentInfo.amountToPay.toFixed(2)}€</b>.`;
       } else {
-        message += `\nIl tuo saldo è stato sufficiente per coprire l'intero importo, e ti restano ${paymentInfo.remainingBalance.toFixed(2)} kWh.`;
+        message += `\nIl tuo saldo è stato sufficiente per coprire l'intero importo, e ti restano <b>${paymentInfo.remainingBalance.toFixed(2)} kWh</b>.`;
       }
     }
 
@@ -317,7 +489,8 @@ const createDonation = async (userId, adminId = ADMIN_USER_ID, amount) => {
     const donation = new Donation({
       userId,
       adminId,
-      kwhAmount: amount
+      kwhAmount: amount,
+      isUsed: false
     });
     
     await donation.save();
@@ -381,15 +554,20 @@ const notifyAdminAboutDonation = async (donation, donor) => {
           const donorName = donor.username ? 
             '@' + donor.username : 
             donor.firstName || 'Venditore';
+            
+          // Recupera il totale donato da questo venditore
+          const totalFromVendor = await Donation.getTotalAvailableFromVendor(newAdmin.userId, donor.userId);
           
           await bot.telegram.sendMessage(newAdmin.userId, `
 🎁 <b>Nuova donazione ricevuta!</b> 🎁
 
 ${donorName} ti ha donato ${donation.kwhAmount} kWh.
 
-Il tuo saldo attuale è di ${newAdmin.balance.toFixed(2)} kWh.
+<b>Totale disponibile da questo venditore:</b> ${totalFromVendor.toFixed(2)} kWh
+<b>Saldo attuale totale:</b> ${newAdmin.balance.toFixed(2)} kWh
 
 <b>Nota:</b> Il tuo account admin è stato creato automaticamente.
+Usa /le_mie_donazioni per vedere tutte le donazioni ricevute.
 `, {
             parse_mode: 'HTML'
           });
@@ -411,6 +589,9 @@ Il tuo saldo attuale è di ${newAdmin.balance.toFixed(2)} kWh.
       '@' + donor.username : 
       donor.firstName || 'Venditore';
     
+    // Recupera il totale donato da questo venditore
+    const totalFromVendor = await Donation.getTotalAvailableFromVendor(admin.userId, donor.userId);
+    
     // Invia la notifica
     try {
       await bot.telegram.sendMessage(admin.userId, `
@@ -418,7 +599,10 @@ Il tuo saldo attuale è di ${newAdmin.balance.toFixed(2)} kWh.
 
 ${donorName} ti ha donato ${donation.kwhAmount} kWh.
 
-Il tuo saldo attuale è di ${admin.balance.toFixed(2)} kWh.
+<b>Totale disponibile da questo venditore:</b> ${totalFromVendor.toFixed(2)} kWh
+<b>Saldo attuale totale:</b> ${admin.balance.toFixed(2)} kWh
+
+Usa /le_mie_donazioni per vedere tutte le donazioni ricevute.
 `, {
         parse_mode: 'HTML'
       });
@@ -435,6 +619,64 @@ Il tuo saldo attuale è di ${admin.balance.toFixed(2)} kWh.
   }
 };
 
+/**
+ * Ottiene le statistiche delle donazioni per un utente
+ * @param {Number} userId - ID dell'utente
+ * @returns {Promise<Object>} Statistiche delle donazioni
+ */
+const getDonationStats = async (userId) => {
+  try {
+    // Ottiene le statistiche per l'admin (donazioni ricevute)
+    if (isAdmin(userId)) {
+      const vendorSummary = await Donation.getVendorSummary(userId);
+      
+      // Calcola i totali
+      let totalDonated = 0;
+      let totalAvailable = 0;
+      let totalUsed = 0;
+      
+      for (const vendor of vendorSummary) {
+        totalDonated += vendor.totalDonated;
+        totalAvailable += vendor.availableAmount;
+        totalUsed += vendor.usedAmount;
+      }
+      
+      return {
+        isAdmin: true,
+        totalDonated,
+        totalAvailable,
+        totalUsed,
+        vendorSummary
+      };
+    } 
+    // Ottiene le statistiche per un utente normale (donazioni effettuate)
+    else {
+      const donationsMade = await Donation.find({ userId });
+      
+      // Calcola i totali
+      let totalDonated = 0;
+      let totalUsed = 0;
+      
+      for (const donation of donationsMade) {
+        totalDonated += donation.kwhAmount;
+        if (donation.isUsed) {
+          totalUsed += donation.kwhAmount;
+        }
+      }
+      
+      return {
+        isAdmin: false,
+        totalDonated,
+        totalUsed,
+        donationsMade
+      };
+    }
+  } catch (err) {
+    logger.error(`Errore nel recupero delle statistiche delle donazioni per utente ${userId}:`, err);
+    throw err;
+  }
+};
+
 module.exports = {
   createTransaction,
   handlePaymentWithBalance,
@@ -443,5 +685,6 @@ module.exports = {
   showCalculationToSeller,
   sendPaymentRequest,
   createDonation,
-  notifyAdminAboutDonation
+  notifyAdminAboutDonation,
+  getDonationStats
 };
