@@ -4,7 +4,7 @@ const userService = require('../services/userService');
 const offerService = require('../services/offerService');
 const announcementService = require('../services/announcementService');
 const walletService = require('../services/walletService');
-const { formatUserProfile, formatOfferListItem, formatWelcomeMessage } = require('../utils/formatters');
+const { formatUserProfile, formatOfferListItem, formatWelcomeMessage, formatAdminHelpMessage } = require('../utils/formatters');
 const User = require('../models/user');
 const Offer = require('../models/offer');
 const Announcement = require('../models/announcement');
@@ -363,11 +363,14 @@ const helpCommand = async (ctx) => {
       username: ctx.from.username
     });
     
-    // Usa lo stesso formato del messaggio di benvenuto
-    const helpMessage = formatWelcomeMessage();
+    // Verifica se l'utente è un amministratore
+    const isAdminUser = isAdmin(ctx.from.id);
+    
+    // Usa il messaggio di help appropriato
+    const helpMessage = isAdminUser ? formatAdminHelpMessage() : formatWelcomeMessage();
     
     await ctx.reply(helpMessage, { parse_mode: 'HTML' });
-    logger.debug(`Messaggio di aiuto inviato a ${ctx.from.id}`);
+    logger.debug(`Messaggio di aiuto (${isAdminUser ? 'admin' : 'utente'}) inviato a ${ctx.from.id}`);
   } catch (err) {
     logger.error(`Errore nell'invio del messaggio di aiuto per utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
@@ -790,7 +793,7 @@ const partnerWalletCommand = async (ctx) => {
     await ctx.reply(message, { parse_mode: 'HTML' });
     
   } catch (err) {
-    logger.error(`Errore nel recupero dei dettagli del portafoglio con partner ${ctx.message?.text}:`, err);
+    logger.error(`Errore nel recupero dei dettagli del portafoglio per utente ${ctx.from.id} con partner ${partnerId}:`, err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
