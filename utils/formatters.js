@@ -364,7 +364,7 @@ ${sanitizedInfo ? `ℹ️ Info aggiuntive: ${sanitizedInfo}\n` : ''}
  * @param {String} role - Il ruolo dell'utente (Acquirente o Venditore)
  * @returns {String} Testo formattato dell'elemento
  */
-const formatOfferListItem = (offer, index, otherUser, role) => {
+const formatOfferListItem = async (offer, index, otherUser, role) => {
   const otherUserName = otherUser ? 
     (otherUser.username ? '@' + sanitizeMarkdown(otherUser.username) : sanitizeMarkdown(otherUser.firstName)) : 
     'Utente sconosciuto';
@@ -444,7 +444,7 @@ const formatUserProfile = (user, transactions, sellAnnouncement, buyAnnouncement
 };
 
 /**
- * Formatta il messaggio di benvenuto con i comandi disponibili
+ * Formatta il messaggio di benvenuto con i comandi disponibili per utenti normali
  * @returns {String} Testo formattato del messaggio di benvenuto
  */
 const formatWelcomeMessage = () => {
@@ -453,14 +453,62 @@ const formatWelcomeMessage = () => {
 
 Questo bot ti permette di vendere o comprare kWh per la ricarica di veicoli elettrici.
 
-🔌 <b>Comandi disponibili:</b>
+🔌 <b>Comandi principali:</b>
+• /start - Avvia il bot
+• /help - Mostra questo messaggio di aiuto
 • /vendi_kwh - Crea un annuncio per vendere kWh
 • /le_mie_ricariche - Visualizza le tue ricariche attive
 • /profilo - Visualizza il tuo profilo
+• /portafoglio - Visualizza il tuo portafoglio
+• /portafoglio_partner - Visualizza il portafoglio con un partner specifico
 • /archivia_annuncio - Archivia il tuo annuncio attivo
-• /help - Mostra questo messaggio di aiuto
+• /annulla - Annulla la procedura in corso
 
-Se hai domande, contatta @admin_username.
+Per qualsiasi problema o domanda, contatta gli amministratori.
+`;
+};
+
+/**
+ * Formatta il messaggio di help per gli admin
+ * @returns {String} Testo formattato con i comandi per gli admin
+ */
+const formatAdminHelpMessage = () => {
+  return `
+🔑 <b>Pannello Admin - Comandi disponibili</b>
+
+<b>Comandi principali:</b>
+• /start - Avvia il bot
+• /help - Mostra questo pannello di aiuto admin
+• /vendi_kwh - Crea un annuncio per vendere kWh
+• /le_mie_ricariche - Visualizza le tue ricariche attive
+• /profilo - Visualizza il tuo profilo
+• /portafoglio - Visualizza il tuo portafoglio
+• /archivia_annuncio - Archivia il tuo annuncio attivo
+• /annulla - Annulla la procedura in corso
+
+<b>Comandi di amministrazione:</b>
+• /update_commands - Aggiorna i comandi del bot
+• /avvio_ricarica - Avvia una ricarica utilizzando il saldo donato
+• /le_mie_donazioni - Visualizza le donazioni ricevute
+• /portafoglio_venditore - Dettagli portafoglio con un venditore specifico
+• /portafoglio_partner - Dettagli portafoglio generico con un partner
+
+<b>Gestione utenti:</b>
+• /cancella_dati_utente - Cancella i dati di un utente
+• /aggiungi_feedback - Aggiungi feedback a un utente
+
+<b>Gestione database:</b>
+• /db_admin - Comandi di gestione del database
+• /check_admin_config - Verifica configurazione admin
+• /create_admin_account - Crea o ripristina l'account admin
+• /system_checkup - Esegue un controllo diagnostico del sistema
+
+<b>Sintassi comandi:</b>
+• /avvio_ricarica [username o ID] - Avvia ricarica con un venditore
+• /portafoglio_venditore [ID] - Mostra portafoglio con un venditore
+• /cancella_dati_utente [username o ID] - Cancella dati utente
+• /aggiungi_feedback [username o ID] positivi:X negativi:Y - Modifica feedback
+• /db_admin [operazione] - Esegue operazioni sul database
 `;
 };
 
@@ -472,5 +520,6 @@ module.exports = {
   formatOfferListItem,
   formatUserProfile,
   formatWelcomeMessage,
+  formatAdminHelpMessage,
   sanitizeMarkdown
 };
