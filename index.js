@@ -55,6 +55,50 @@ const BotExecutionLock = mongoose.model('BotExecutionLock', botExecutionLockSche
 const INSTANCE_ID = `instance_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 logger.info(`ID istanza generato: ${INSTANCE_ID}`);
 
+/**
+ * Assicura che l'utente admin sia registrato nel sistema
+ * @returns {Promise<void>}
+ */
+const ensureAdminRegistered = async () => {
+  try {
+    const { ADMIN_USER_ID } = require('./config/admin');
+    
+    if (!ADMIN_USER_ID) {
+      logger.warn('ADMIN_USER_ID non configurato nelle variabili d\'ambiente, funzionalità admin limitate');
+      return;
+    }
+    
+    logger.info(`Verifica presenza account admin (ID: ${ADMIN_USER_ID})...`);
+    
+    // Controlla se l'admin esiste
+    const User = require('./models/user');
+    const admin = await User.findOne({ userId: parseInt(ADMIN_USER_ID) });
+    
+    if (!admin) {
+      logger.warn(`Admin (ID: ${ADMIN_USER_ID}) non trovato nel database, creazione automatica...`);
+      
+      // Crea l'account admin
+      const newAdmin = new User({
+        userId: parseInt(ADMIN_USER_ID),
+        username: 'admin', // Username generico
+        firstName: 'Administrator',
+        lastName: 'Bot',
+        balance: 0,
+        registrationDate: new Date(),
+        positiveRatings: 0,
+        totalRatings: 0
+      });
+      
+      await newAdmin.save();
+      logger.info(`Account admin creato con successo (ID: ${ADMIN_USER_ID})`);
+    } else {
+      logger.debug(`Account admin trovato (ID: ${ADMIN_USER_ID}), saldo attuale: ${admin.balance.toFixed(2)} kWh`);
+    }
+  } catch (err) {
+    logger.error('Errore nella verifica dell\'account admin:', err);
+  }
+};
+
 // Assicurati che venga rimosso il lock file locale all'uscita
 process.on('exit', () => {
   cleanupLocalLock();
@@ -208,6 +252,9 @@ const init = async () => {
     
     // Assicurati che l'indice TTL sia impostato
     await BotMasterLock.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: MASTER_LOCK_TIMEOUT });
+    
+    // Verifica e registra l'account admin se necessario
+    await ensureAdminRegistered();
     
     // In un ambiente come Render.com, attendi un breve ritardo casuale prima di provare a
     // ottenere il master lock, per ridurre la possibilità di collisioni
@@ -534,6 +581,10 @@ const setupBot = () => {
   botInstance.command('aggiungi_feedback', commands.addFeedbackCommand);
   // Aggiungi il nuovo comando admin
   botInstance.command('db_admin', commands.dbAdminCommand);
+  // Aggiungi i nuovi comandi admin per la gestione delle donazioni
+  botInstance.command('check_admin_config', commands.checkAdminConfigCommand);
+  botInstance.command('create_admin_account', commands.createAdminAccountCommand);
+  botInstance.command('system_checkup', commands.systemCheckupCommand);
 
   // Nuovo handler per il comando speciale inizia_acquisto_ID
   botInstance.command(/inizia_acquisto_(.+)/, async (ctx) => {
