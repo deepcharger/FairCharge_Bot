@@ -247,8 +247,17 @@ process.on('unhandledRejection', async (reason, promise) => {
 const init = async () => {
   try {
     // Connetti al database
-    await connectToDatabase();
+    const db = await connectToDatabase();
     logger.info('Connesso al database MongoDB');
+    
+    // Test della connessione al database - AGGIUNTO
+    mongoose.connection.on('error', (err) => {
+      logger.error('Errore connessione MongoDB:', err);
+    });
+    
+    mongoose.connection.once('open', () => {
+      logger.info('Test connessione MongoDB: riuscito');
+    });
     
     // Assicurati che l'indice TTL sia impostato
     await BotMasterLock.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: MASTER_LOCK_TIMEOUT });
@@ -567,6 +576,15 @@ const setupBot = () => {
   // Configura la pulizia periodica delle sessioni inattive
   setupPeriodicCleaner(botInstance);
 
+  // Middleware di debug per comandi - AGGIUNTO
+  botInstance.use((ctx, next) => {
+    if (ctx.updateType === 'message' && ctx.message && ctx.message.text && ctx.message.text.startsWith('/')) {
+      const command = ctx.message.text.split(' ')[0].substring(1);
+      logger.debug(`Comando ricevuto: /${command} da ${ctx.from.id}`);
+    }
+    return next();
+  });
+
   // Registra i gestori dei comandi
   botInstance.start(commands.startCommand);
   botInstance.command('vendi_kwh', commands.sellKwhCommand);
@@ -579,12 +597,41 @@ const setupBot = () => {
   botInstance.command('archivia_annuncio', commands.archiveAnnouncementCommand);
   botInstance.command('cancella_dati_utente', commands.deleteUserDataCommand);
   botInstance.command('aggiungi_feedback', commands.addFeedbackCommand);
-  // Aggiungi il nuovo comando admin
   botInstance.command('db_admin', commands.dbAdminCommand);
-  // Aggiungi i nuovi comandi admin per la gestione delle donazioni
   botInstance.command('check_admin_config', commands.checkAdminConfigCommand);
   botInstance.command('create_admin_account', commands.createAdminAccountCommand);
   botInstance.command('system_checkup', commands.systemCheckupCommand);
+  
+  // MODIFICA: Assicuriamoci che i comandi portafoglio siano registrati correttamente
+  botInstance.command('portafoglio', commands.walletCommand);
+  botInstance.command('portafoglio_partner', commands.partnerWalletCommand);
+  botInstance.command('portafoglio_venditore', commands.vendorWalletCommand);
+  botInstance.command('le_mie_donazioni', commands.myDonationsCommand);
+
+  // Aggiungiamo handler provvisorio di debug per i comandi portafoglio - AGGIUNTO
+  botInstance.command('debug_portafoglio', async (ctx) => {
+    try {
+      logger.info(`Test comando debug_portafoglio da ${ctx.from.id}`);
+      await ctx.reply('⏳ Test debug portafoglio in corso...');
+      
+      // Verifica connessione MongoDB
+      const isConnected = mongoose.connection.readyState === 1;
+      await ctx.reply(`Connessione MongoDB: ${isConnected ? '✅ Connesso' : '❌ Non connesso'}`);
+      
+      // Verifica disponibilità service
+      const walletService = require('./services/walletService');
+      await ctx.reply(`Service disponibile: ${walletService ? '✅ OK' : '❌ Non disponibile'}`);
+      
+      // Verifica userId
+      await ctx.reply(`User ID: ${ctx.from.id}`);
+      
+      // Test completo
+      await ctx.reply('Test completato. Prova ora a usare /portafoglio');
+    } catch (err) {
+      logger.error(`Errore test debug portafoglio:`, err);
+      await ctx.reply(`❌ Errore nel test: ${err.message}`);
+    }
+  });
 
   // Nuovo handler per il comando speciale inizia_acquisto_ID
   botInstance.command(/inizia_acquisto_(.+)/, async (ctx) => {
