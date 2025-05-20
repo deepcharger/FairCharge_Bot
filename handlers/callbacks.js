@@ -1,1069 +1,2168 @@
-// Gestori delle callback per i bottoni inline
+// Gestione delle callback per i bottoni inline
 const { Markup } = require('telegraf');
-const { bot, stage } = require('../config/bot');
-const userService = require('../services/userService');
+const User = require('../models/user');
+const Offer = require('../models/offer');
+const Announcement = require('../models/announcement');
+const Transaction = require('../models/transaction');
+const Donation = require('../models/donation');
+const logger = require('../utils/logger');
+const moment = require('moment');
+const { bot } = require('../config/bot');
+const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
 const announcementService = require('../services/announcementService');
 const offerService = require('../services/offerService');
-const paymentService = require('../services/paymentService');
-const Announcement = require('../models/announcement');
-const Offer = require('../models/offer');
-const User = require('../models/user');
-const moment = require('moment');
-const logger = require('../utils/logger');
-const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
+const donationService = require('../services/donationService');
+const transactionService = require('../services/transactionService');
+const userService = require('../services/userService');
+const { formatSellAnnouncement } = require('../utils/formatters');
+const uiElements = require('../utils/uiElements');
 
-// Handler per selezionare il tipo di corrente
-const connectorTypeCallback = async (ctx) => {
-  // Estrai il tipo di corrente dal match
-  const currentType = ctx.match[1];
-  ctx.wizard.state.currentType = currentType;
-  
-  logger.debug(`Tipo di corrente selezionato: ${currentType} per utente ${ctx.from.id}`);
-  await ctx.answerCbQuery(`Hai selezionato: ${currentType}`);
-  
-  let currentText;
-  if (currentType === 'AC') {
-    currentText = 'AC (corrente alternata)';
-  } else if (currentType === 'DC') {
-    currentText = 'DC (corrente continua)';
-  } else if (currentType === 'both') {
-    currentText = 'Entrambe (AC e DC)';
-  }
-  
-  await ctx.reply(`✅ Tipo di corrente selezionato: *${currentText}*`, {
-    parse_mode: 'Markdown'
-  });
-  await ctx.wizard.steps[2](ctx);
-};
-
-// Handler per pubblicare un annuncio di vendita
-const publishSellCallback = async (ctx) => {
+/**
+ * Gestisce il click sul bottone "Compra kWh"
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const buyKwhCallback = async (ctx) => {
   try {
-    await ctx.answerCbQuery('Pubblicazione in corso...');
-    
-    const user = await userService.registerUser(ctx.from);
-    
-    // Controlla se l'utente ha già un annuncio attivo
-    const existingAnnouncement = await announcementService.getActiveAnnouncement(user.userId, 'sell');
-    
-    // Se esiste già un annuncio attivo, archivialo
-    if (existingAnnouncement) {
-      await announcementService.archiveAnnouncement(existingAnnouncement._id);
-      await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
-    }
-    
-    // Crea un nuovo annuncio
-    const announcementData = {
-      price: ctx.wizard.state.price,
-      connectorType: ctx.wizard.state.currentType, // Usa currentType invece di connectorType
-      brand: ctx.wizard.state.brand,
-      location: ctx.wizard.state.location,
-      nonActivatableBrands: ctx.wizard.state.nonActivatableBrands === 'nessuno' ? '' : ctx.wizard.state.nonActivatableBrands,
-      additionalInfo: ctx.wizard.state.additionalInfo === 'nessuna' ? '' : ctx.wizard.state.additionalInfo
-    };
-    
-    const newAnnouncement = await announcementService.createSellAnnouncement(announcementData, user.userId);
-    
-    // Pubblica l'annuncio nel topic
-    await announcementService.publishAnnouncement(newAnnouncement, user);
-    
-    // Aggiorna l'utente con il riferimento al nuovo annuncio
-    await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', newAnnouncement._id);
-    
-    await ctx.reply('✅ *Il tuo annuncio è stato pubblicato con successo nel topic "Vendo kWh"!*', {
-      parse_mode: 'Markdown'
+    logger.info(`Callback buy_kwh ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
     });
     
-    return ctx.scene.leave();
+    // Estrai l'ID dell'annuncio dalla callback data
+    const announcementId = ctx.callbackQuery.data.split('_')[2];
+    
+    if (!announcementId) {
+      await ctx.answerCbQuery('ID annuncio non valido', { show_alert: true });
+      return;
+    }
+    
+    // Registra l'utente se non esiste
+    const user = await userService.registerUser(ctx.from);
+    
+    // Recupera l'annuncio
+    const announcement = await Announcement.findById(announcementId);
+    
+    if (!announcement) {
+      await ctx.answerCbQuery('Annuncio non trovato', { show_alert: true });
+      return;
+    }
+    
+    // Verifica se l'annuncio è attivo
+    if (announcement.status !== 'active') {
+      await ctx.answerCbQuery('Questo annuncio non è più attivo', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che non sia il proprio annuncio
+    if (announcement.userId === user.userId) {
+      await ctx.answerCbQuery('Non puoi acquistare dal tuo stesso annuncio', { show_alert: true });
+      return;
+    }
+    
+    // Recupera info sul venditore
+    const seller = await User.findOne({ userId: announcement.userId });
+    
+    if (!seller) {
+      await ctx.answerCbQuery('Venditore non trovato', { show_alert: true });
+      return;
+    }
+    
+    // Memorizza l'ID dell'annuncio nella sessione dell'utente
+    ctx.session.announcementId = announcementId;
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Visualizza i dettagli dell'annuncio in un nuovo messaggio
+    const message = `${uiElements.formatProgressMessage(1, 5, "Procedura di Acquisto kWh")}Hai selezionato questo annuncio:\n\n${formatSellAnnouncement(announcement, seller)}`;
+    
+    // Bottoni per procedere o annullare
+    const buttons = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('🔋 Procedi con l\'acquisto', `start_buy_${announcementId}`),
+        Markup.button.callback('❌ Annulla', 'cancel_buy')
+      ]
+    ]);
+    
+    await ctx.reply(message, {
+      parse_mode: 'HTML',
+      reply_markup: buttons.reply_markup
+    });
+    
   } catch (err) {
-    console.error('Errore nella pubblicazione dell\'annuncio:', err);
-    await ctx.reply('❌ Si è verificato un errore durante la pubblicazione. Per favore, riprova più tardi.');
-    return ctx.scene.leave();
+    logger.error(`Errore nella callback buyKwh per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
   }
 };
 
-// Handler per annullare la creazione di un annuncio
-const cancelSellCallback = async (ctx) => {
-  await ctx.answerCbQuery('Annuncio cancellato');
-  await ctx.reply('❌ Creazione dell\'annuncio annullata.');
-  return ctx.scene.leave();
-};
-
-// Handler per iniziare l'acquisto di kWh da un annuncio - Versione ultra-robusta
-const buyKwhCallback = async (ctx) => {
-  if (!ctx || !ctx.match || !ctx.match[1]) {
-    console.error('Contesto incompleto nella buyKwhCallback');
-    return;
-  }
-  
-  const announcementId = ctx.match[1];
-  
+/**
+ * Gestisce il click su "Procedi con l'acquisto"
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const startBuyCallback = async (ctx) => {
   try {
-    // Verifica che ctx.from esista e abbia un id valido
-    if (!ctx.from || !ctx.from.id) {
-      console.error('ctx.from o ctx.from.id mancante in buyKwhCallback');
+    logger.info(`Callback start_buy ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'annuncio dalla callback data
+    const announcementId = ctx.callbackQuery.data.split('_')[2];
+    
+    if (!announcementId) {
+      await ctx.answerCbQuery('ID annuncio non valido', { show_alert: true });
       return;
     }
     
-    // Verifica se l'utente ha già avviato il bot in privato
-    const user = await User.findOne({ userId: ctx.from.id });
+    // Memorizza l'ID dell'annuncio nella sessione dell'utente
+    ctx.session.announcementId = announcementId;
     
-    if (!user) {
-      // Utente non ha mai avviato il bot, crea un deep link
-      // Assicurati che il nome utente del bot venga recuperato correttamente
-      let botUsername = '';
-      try {
-        // Prima prova a recuperare dal botInfo
-        botUsername = bot.botInfo?.username;
-        
-        // Se non è disponibile, prova a ottenerlo dalle variabili d'ambiente
-        if (!botUsername) {
-          logger.info('botInfo.username non disponibile, utilizzo process.env.BOT_USERNAME');
-          botUsername = process.env.BOT_USERNAME;
-        }
-        
-        // Se ancora non disponibile, utilizza il valore corretto
-        if (!botUsername) {
-          logger.info('BOT_USERNAME non configurato, utilizzo valore hardcoded');
-          botUsername = 'FairChargePro_Bot'; // Username corretto del bot
-        }
-      } catch (e) {
-        logger.error('Errore nel recupero del nome utente del bot:', e);
-        botUsername = 'FairChargePro_Bot'; // Username corretto del bot come fallback
-      }
-      
-      logger.info(`Generazione deepLink con username: ${botUsername}`);
-      const deepLink = `https://t.me/${botUsername}?start=buy_${announcementId}`;
-      
-      try {
-        await ctx.answerCbQuery('Per procedere, avvia prima il bot in privato');
-      } catch (e) {
-        logger.error('Errore answerCbQuery:', e);
-      }
-      
-      await ctx.reply('Per procedere con l\'acquisto, devi prima avviare il bot in chat privata.', {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🚀 Avvia il bot', url: deepLink }]
-          ]
-        }
-      });
-      
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Entra nella scena della procedura guidata di acquisto
+    return ctx.scene.enter('BUY_KWH_WIZARD');
+    
+  } catch (err) {
+    logger.error(`Errore nella callback startBuy per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la selezione del tipo di corrente
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const connectorTypeCallback = async (ctx) => {
+  try {
+    logger.info(`Callback current_type ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai il tipo di corrente dalla callback data
+    const currentType = ctx.callbackQuery.data.split('_')[1];
+    
+    // Memorizza il tipo di corrente nella sessione dell'utente
+    ctx.session.currentType = currentType;
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Continua con il prossimo step del wizard
+    if (ctx.wizard) {
+      return ctx.wizard.next();
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback connectorType per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la conferma di pubblicazione dell'annuncio di vendita
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const publishSellCallback = async (ctx) => {
+  try {
+    logger.info(`Callback publish_sell ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Continua con il prossimo step del wizard
+    if (ctx.wizard) {
+      return ctx.wizard.next();
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback publishSell per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento della creazione dell'annuncio di vendita
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelSellCallback = async (ctx) => {
+  try {
+    logger.info(`Callback cancel_sell ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Procedura annullata');
+    
+    // Esce dalla scena
+    await ctx.scene.leave();
+    
+    // Invia messaggio di conferma annullamento
+    await ctx.reply(uiElements.formatErrorMessage('Procedura di creazione annuncio annullata.', false), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback cancelSell per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'accettazione delle condizioni di acquisto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const acceptConditionsCallback = async (ctx) => {
+  try {
+    logger.info(`Callback accept_conditions ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Continua con il prossimo step del wizard
+    if (ctx.wizard) {
+      return ctx.wizard.next();
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback acceptConditions per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento della procedura di acquisto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelBuyCallback = async (ctx) => {
+  try {
+    logger.info(`Callback cancel_buy ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Procedura annullata');
+    
+    // Esce dalla scena se attiva
+    if (ctx.scene && ctx.scene.current) {
+      await ctx.scene.leave();
+    }
+    
+    // Invia messaggio di conferma annullamento
+    await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback cancelBuy per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'invio della richiesta di acquisto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const sendRequestCallback = async (ctx) => {
+  try {
+    logger.info(`Callback send_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Continua con il prossimo step del wizard
+    if (ctx.wizard) {
+      return ctx.wizard.next();
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback sendRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'accettazione di un'offerta di acquisto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const acceptOfferCallback = async (ctx) => {
+  try {
+    logger.info(`Callback accept_offer ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
       return;
     }
     
-    // Utente già registrato, memorizza l'ID annuncio
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
     
-    // Passa alla chat privata se siamo in un gruppo
-    if (ctx.chat && ctx.chat.type !== 'private') {
-      await ctx.answerCbQuery('Procedura di acquisto avviata');
-      await ctx.reply(`📱 Per procedere con l'acquisto, ti invio un messaggio in privato.`);
-      
+    // Verifica che l'offerta sia in stato pending
+    if (offer.status !== 'pending') {
+      await ctx.answerCbQuery(`L'offerta è già stata ${offer.status === 'accepted' ? 'accettata' : 'gestita'}`, { show_alert: true });
+      return;
+    }
+    
+    // Aggiorna lo stato dell'offerta
+    offer.status = 'accepted';
+    offer.statusChangedAt = new Date();
+    await offer.save();
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Offerta accettata con successo!');
+    
+    // Invia un messaggio al venditore
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Offerta Accettata', 
+      'Hai accettato la richiesta di ricarica. Attendi che l\'acquirente ti comunichi quando è pronto per caricare.'
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+    // Cerca l'acquirente
+    const buyer = await User.findOne({ userId: offer.buyerId });
+    
+    if (buyer) {
+      // Invia una notifica all'acquirente
       try {
-        // Invia un messaggio in chat privata
-        await bot.telegram.sendMessage(ctx.from.id, '🔋 *Procediamo con l\'acquisto kWh...*', {
-          parse_mode: 'Markdown'
-        });
-        
-        // Invia un secondo messaggio per avviare il wizard
-        // Invece di usare la scena corrente, creiamo un comando speciale
-        await bot.telegram.sendMessage(ctx.from.id, 
-          `Per procedere con l'acquisto, usa il seguente comando:\n/inizia_acquisto_${announcementId}`, 
+        await bot.telegram.sendMessage(
+          buyer.userId,
+          uiElements.formatSuccessMessage(
+            'Offerta Accettata',
+            `Il venditore ha accettato la tua richiesta di ricarica!\n\nQuando sei pronto per caricare, usa /le_mie_ricariche e seleziona "Sono pronto per caricare".`
+          ),
           {
+            parse_mode: 'HTML',
+            ...uiElements.mainMenuButton().reply_markup
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica all'acquirente ${buyer.userId}:`, notifyErr);
+      }
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback acceptOffer per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il rifiuto di un'offerta di acquisto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const rejectOfferCallback = async (ctx) => {
+  try {
+    logger.info(`Callback reject_offer ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia in stato pending
+    if (offer.status !== 'pending') {
+      await ctx.answerCbQuery(`L'offerta è già stata ${offer.status === 'rejected' ? 'rifiutata' : 'gestita'}`, { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Chiedi il motivo del rifiuto
+    ctx.session.rejectingOfferId = offerId;
+    
+    await ctx.reply('Per favore, indica il motivo del rifiuto dell\'offerta:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Non sono disponibile', callback_data: 'reject_reason_not_available' }],
+          [{ text: 'Problema con la posizione', callback_data: 'reject_reason_location' }],
+          [{ text: 'Problema con l\'orario', callback_data: 'reject_reason_time' }],
+          [{ text: 'Altro (specifica)', callback_data: 'reject_reason_other' }],
+          [{ text: '❌ Annulla', callback_data: 'reject_cancel' }]
+        ]
+      }
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback rejectOffer per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la segnalazione di "pronto per caricare"
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const readyToChargeCallback = async (ctx) => {
+  try {
+    logger.info(`Callback ready_to_charge ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[3];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente
+    if (offer.buyerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia in stato accepted
+    if (offer.status !== 'accepted') {
+      await ctx.answerCbQuery(`L'offerta non è nello stato corretto per questa azione`, { show_alert: true });
+      return;
+    }
+    
+    // Aggiorna lo stato dell'offerta
+    offer.status = 'ready_to_charge';
+    offer.statusChangedAt = new Date();
+    await offer.save();
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Segnalazione inviata al venditore!');
+    
+    // Invia un messaggio all'acquirente
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Sei Pronto per Caricare',
+      'Hai segnalato al venditore che sei pronto per caricare. Attendi che il venditore avvii la ricarica.'
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+    // Cerca il venditore
+    const seller = await User.findOne({ userId: offer.sellerId });
+    
+    if (seller) {
+      // Invia una notifica al venditore
+      try {
+        const buyer = await User.findOne({ userId: offer.buyerId });
+        const buyerName = buyer ? (buyer.username ? '@' + buyer.username : buyer.firstName) : 'L\'acquirente';
+        
+        await bot.telegram.sendMessage(
+          seller.userId,
+          uiElements.formatSuccessMessage(
+            'Acquirente Pronto',
+            `${buyerName} è pronto per ricaricare!\n\nQuando avvii la ricarica, usa /le_mie_ricariche e seleziona "Ho avviato la ricarica".`
+          ),
+          {
+            parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '🔋 Procedi con l\'acquisto', callback_data: `start_buy_${announcementId}` }]
+                [{ text: '▶️ Ho avviato la ricarica', callback_data: `charging_started_${offerId}` }]
               ]
             }
           }
         );
-      } catch (error) {
-        // Questo errore si verifica se l'utente non ha ancora avviato il bot in privato
-        logger.error('Errore nell\'invio del messaggio privato:', error);
-        
-        // Usa lo stesso approccio per generare il deeplink corretto
-        let botUsername = '';
-        try {
-          botUsername = bot.botInfo?.username || process.env.BOT_USERNAME || 'FairChargePro_Bot';
-        } catch (e) {
-          botUsername = 'FairChargePro_Bot';
-        }
-        
-        const deepLink = `https://t.me/${botUsername}?start=buy_${announcementId}`;
-        
-        await ctx.reply('Non riesco a inviarti un messaggio privato. Avvia prima il bot in chat privata.', {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '🚀 Avvia il bot', url: deepLink }]
-            ]
-          }
-        });
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica al venditore ${seller.userId}:`, notifyErr);
       }
-      
-      return;
     }
     
-    // Se siamo già in chat privata
-    await ctx.answerCbQuery('Procedura di acquisto avviata');
-    
-    // Memorizza l'ID dell'annuncio in una proprietà che verrà usata dalla scena
-    ctx.session.announcementId = announcementId;
-    
-    // Entra nella scena
-    return ctx.scene.enter('BUY_KWH_WIZARD');
   } catch (err) {
-    logger.error('Errore nell\'avvio della procedura di acquisto:', err);
-    try {
-      await ctx.answerCbQuery('Si è verificato un errore');
-    } catch (e) {
-      logger.error('Errore in answerCbQuery:', e);
-    }
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+    logger.error(`Errore nella callback readyToCharge per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
   }
 };
 
-// Nuova callback per avviare l'acquisto da chat privata
-const startBuyCallback = async (ctx) => {
-  if (!ctx || !ctx.match || !ctx.match[1]) {
-    logger.error('Contesto incompleto nella startBuyCallback');
-    return;
-  }
-  
-  const announcementId = ctx.match[1];
-  
-  try {
-    // Memorizza l'ID dell'annuncio in una proprietà che verrà usata dalla scena
-    ctx.session.announcementId = announcementId;
-    
-    await ctx.answerCbQuery('Avvio procedura di acquisto...');
-    
-    // Entra nella scena
-    return ctx.scene.enter('BUY_KWH_WIZARD');
-  } catch (err) {
-    logger.error('Errore nell\'avvio della procedura di acquisto da chat privata:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per accettare le condizioni di acquisto
-const acceptConditionsCallback = async (ctx) => {
-  await ctx.answerCbQuery('Condizioni accettate');
-  await ctx.reply('📅 *In quale data vorresti ricaricare?*\n\n_Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023_', {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-      ]
-    }
-  });
-  ctx.wizard.next();
-};
-
-// Handler per annullare l'acquisto
-const cancelBuyCallback = async (ctx) => {
-  await ctx.answerCbQuery('Procedura annullata');
-  await ctx.reply('❌ Procedura di acquisto annullata.');
-  return ctx.scene.leave();
-};
-
-// Handler per inviare una richiesta di ricarica
-const sendRequestCallback = async (ctx) => {
-  try {
-    await ctx.answerCbQuery('Invio richiesta in corso...');
-    
-    const buyer = await userService.registerUser(ctx.from);
-    
-    // Prepara i dati dell'offerta
-    const offerData = {
-      buyerId: buyer.userId,
-      sellerId: ctx.wizard.state.seller.userId,
-      date: ctx.wizard.state.date,
-      time: ctx.wizard.state.time,
-      brand: ctx.wizard.state.brand,
-      coordinates: ctx.wizard.state.coordinates,
-      additionalInfo: ctx.wizard.state.additionalInfo
-    };
-    
-    // Crea la nuova offerta
-    const newOffer = await offerService.createOffer(offerData, ctx.wizard.state.announcement._id);
-    
-    // Notifica il venditore
-    await offerService.notifySellerAboutOffer(newOffer, buyer, ctx.wizard.state.announcement);
-    
-    await ctx.reply('✅ *La tua richiesta è stata inviata al venditore!*\n\nRiceverai una notifica quando risponderà.', {
-      parse_mode: 'Markdown'
-    });
-    
-    return ctx.scene.leave();
-  } catch (err) {
-    console.error('Errore nell\'invio della richiesta:', err);
-    await ctx.reply('❌ Si è verificato un errore durante l\'invio della richiesta. Per favore, riprova più tardi.');
-    return ctx.scene.leave();
-  }
-};
-
-// Handler per accettare un'offerta di ricarica
-const acceptOfferCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Aggiorna lo stato dell'offerta
-    const offer = await offerService.updateOfferStatus(offerId, 'accepted');
-    
-    // Notifica all'acquirente
-    const message = `
-✅ *Ricarica accettata!* ✅
-
-Il venditore ha accettato la tua richiesta di ricarica per il ${moment(offer.date).format('DD/MM/YYYY')} alle ${offer.time}.
-
-Quando sarai vicino alla colonnina, usa il comando /le_mie_ricariche per avviare la procedura di ricarica.
-`;
-    
-    await offerService.notifyUserAboutOfferUpdate(offer, offer.buyerId, message);
-    
-    await ctx.reply(`
-✅ *Hai accettato la richiesta di ricarica* per il ${moment(offer.date).format('DD/MM/YYYY')} alle ${offer.time}.
-
-Quando l'acquirente sarà pronto per ricaricare, riceverai una notifica.
-`, {
-      parse_mode: 'Markdown'
-    });
-  } catch (err) {
-    console.error('Errore nell\'accettazione dell\'offerta:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per rifiutare un'offerta di ricarica
-const rejectOfferCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Richiesta rifiutata');
-    
-    // Chiedi il motivo del rifiuto
-    await ctx.reply('📝 *Per quale motivo stai rifiutando questa richiesta?*', {
-      parse_mode: 'Markdown',
-      reply_markup: { force_reply: true }
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.rejectOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nel rifiuto dell\'offerta:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per segnalare che l'acquirente è pronto per caricare
-const readyToChargeCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Aggiorna lo stato dell'offerta
-    const offer = await offerService.updateOfferStatus(offerId, 'ready_to_charge');
-    
-    // Chiedi informazioni sul connettore
-    await ctx.reply('🔌 *Quale numero di connettore utilizzerai?*\n\n_Scrivi il numero o "altro" se non c\'è o se vuoi contattare direttamente il venditore_', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.connectorOfferId = offerId;
-    
-    // Notifica al venditore
-    const buyer = await User.findOne({ userId: offer.buyerId });
-    const buyerName = buyer ? 
-      (buyer.username ? '@' + buyer.username : buyer.firstName) : 
-      'Acquirente';
-    
-    const message = `
-🔋 *L'acquirente è pronto per caricare!* 🔋
-
-${buyerName} è arrivato alla colonnina e sta per iniziare la ricarica.
-*Località:* ${offer.coordinates}
-*Colonnina:* ${offer.brand}
-
-Ti invierà a breve il numero del connettore.
-`;
-    
-    await offerService.notifyUserAboutOfferUpdate(offer, offer.sellerId, message);
-  } catch (err) {
-    console.error('Errore nella segnalazione di prontezza:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per segnalare che il venditore ha avviato la ricarica
+/**
+ * Gestisce la segnalazione di "ricarica avviata"
+ * @param {Object} ctx - Contesto Telegraf
+ */
 const chargingStartedCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
   try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
+    logger.info(`Callback charging_started ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia in stato ready_to_charge
+    if (offer.status !== 'ready_to_charge') {
+      await ctx.answerCbQuery(`L'offerta non è nello stato corretto per questa azione`, { show_alert: true });
+      return;
+    }
     
     // Aggiorna lo stato dell'offerta
-    const offer = await offerService.updateOfferStatus(offerId, 'charging_started');
+    offer.status = 'charging_started';
+    offer.statusChangedAt = new Date();
+    await offer.save();
     
-    // Notifica all'acquirente
-    const message = `
-▶️ *Il venditore ha avviato la ricarica!* ▶️
-
-Verifica se la colonnina ha iniziato a caricare correttamente.
-`;
+    // Conferma la callback query
+    await ctx.answerCbQuery('Segnalazione inviata all\'acquirente!');
     
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '✅ Ricarica partita', callback_data: `charging_ok_${offerId}` },
-          { text: '❌ Problemi', callback_data: `charging_issues_${offerId}` }
-        ]
-      ]
-    };
-    
-    await offerService.notifyUserAboutOfferUpdate(offer, offer.buyerId, message, keyboard);
-    
-    await ctx.reply('✅ *Hai segnalato di aver avviato la ricarica.*\n\nL\'acquirente confermerà se tutto funziona correttamente.', {
-      parse_mode: 'Markdown'
+    // Invia un messaggio al venditore
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Ricarica Avviata',
+      'Hai segnalato all\'acquirente che la ricarica è stata avviata. Attendi conferma.'
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
     });
+    
+    // Cerca l'acquirente
+    const buyer = await User.findOne({ userId: offer.buyerId });
+    
+    if (buyer) {
+      // Invia una notifica all'acquirente
+      try {
+        const seller = await User.findOne({ userId: offer.sellerId });
+        const sellerName = seller ? (seller.username ? '@' + seller.username : seller.firstName) : 'Il venditore';
+        
+        await bot.telegram.sendMessage(
+          buyer.userId,
+          uiElements.formatSuccessMessage(
+            'Ricarica Avviata',
+            `${sellerName} ha avviato la ricarica. Controlla se la tua auto ha iniziato a caricare.`
+          ),
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Ricarica partita', callback_data: `charging_ok_${offerId}` },
+                  { text: '❌ Problemi', callback_data: `charging_issues_${offerId}` }
+                ]
+              ]
+            }
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica all'acquirente ${buyer.userId}:`, notifyErr);
+      }
+    }
+    
   } catch (err) {
-    console.error('Errore nella segnalazione di avvio ricarica:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+    logger.error(`Errore nella callback chargingStarted per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
   }
 };
 
-// Handler per confermare che la ricarica è partita correttamente
+/**
+ * Gestisce la conferma che la ricarica sta funzionando
+ * @param {Object} ctx - Contesto Telegraf
+ */
 const chargingOkCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
   try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Aggiorna lo stato dell'offerta
-    const offer = await offerService.updateOfferStatus(offerId, 'charging');
-    
-    // Notifica al venditore
-    const message = `
-✅ *Ricarica confermata!* ✅
-
-L'acquirente ha confermato che la ricarica è partita correttamente.
-`;
-    
-    await offerService.notifyUserAboutOfferUpdate(offer, offer.sellerId, message);
-    
-    await ctx.reply('✅ *Hai confermato che la ricarica è partita correttamente.*\n\nQuando la ricarica sarà terminata, usa il comando /le_mie_ricariche per completare la procedura.', {
-      parse_mode: 'Markdown'
-    });
-  } catch (err) {
-    console.error('Errore nella conferma di ricarica ok:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per segnalare problemi con la ricarica
-const chargingIssuesCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Chiedi all'utente di specificare il problema
-    await ctx.reply('⚠️ *Descrivi il problema che stai riscontrando con la ricarica:*', {
-      parse_mode: 'Markdown',
-      reply_markup: { force_reply: true }
+    logger.info(`Callback charging_ok ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
     });
     
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.issueOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella segnalazione di problemi:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per segnalare che la ricarica è completata
-const chargingCompletedCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
     
+    // Cerca l'offerta
     const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'charging') {
-      await ctx.reply('❌ Questa ricarica non è disponibile o non è nello stato corretto.');
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
       return;
     }
     
-    // Chiedi quanti kWh sono stati caricati
-    await ctx.reply('⚡ *Quanti kWh hai caricato?*\n\n_Inserisci un numero, ad esempio 22.5_', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.completedOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella segnalazione di ricarica completata:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per confermare i kWh dichiarati
-const confirmKwhCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'kwh_confirmed') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
+    // Verifica che l'utente sia l'acquirente
+    if (offer.buyerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
       return;
     }
     
-    // Richiedi al venditore di inserire il costo unitario per kWh
-    await paymentService.requestUnitPriceFromSeller(offer);
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.paymentAmountOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella conferma dei kWh:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per contestare i kWh dichiarati
-const disputeKwhCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Chiedi il motivo della contestazione
-    await ctx.reply('📝 *Per quale motivo contesti i kWh dichiarati?*\n\n_Specifica anche il valore corretto se lo conosci._', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.disputeKwhOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella contestazione dei kWh:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per impostare il pagamento
-const setPaymentCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'kwh_confirmed') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
-      return;
-    }
-    
-    // Richiedi al venditore di inserire il costo unitario per kWh
-    await ctx.reply(`⚡ *Inserisci il costo unitario per kWh*
-
-L'acquirente ha dichiarato di aver caricato *${offer.kwhCharged} kWh*.
-
-Per favore, inserisci il costo unitario per ogni kWh (esempio: 0.22 per 22 centesimi).
-Il sistema calcolerà automaticamente l'importo totale da pagare.`, {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.paymentAmountOfferId = offerId;
-  } catch (err) {
-    logger.error(`Errore nella richiesta di pagamento:`, err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per verificare lo stato del pagamento
-const verifyPaymentCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Verifica pagamento in corso...');
-    
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'payment_pending') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
-      return;
-    }
-    
-    // Recupera l'acquirente
-    const buyer = await User.findOne({ userId: offer.buyerId });
-    const buyerName = buyer ? 
-      (buyer.username ? '@' + buyer.username : buyer.firstName) : 
-      'Acquirente';
-    
-    await ctx.reply(`
-💰 *Verifica pagamento* 💰
-
-${buyerName} deve ancora confermare di aver effettuato il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
-
-Ti verrà inviata una notifica non appena l'acquirente confermerà il pagamento.
-`, {
-      parse_mode: 'Markdown'
-    });
-    
-  } catch (err) {
-    logger.error(`Errore nella verifica del pagamento per offerta ${offerId}:`, err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per confermare e inviare la richiesta di pagamento
-const confirmPaymentRequestCallback = async (ctx) => {
-  try {
-    // Formato: confirm_payment_OFFERID_TOTALAMOUNT
-    const match = ctx.match[0].match(/confirm_payment_(.+)_(.+)/);
-    if (!match) {
-      await ctx.answerCbQuery('Formato callback non valido');
-      return;
-    }
-    
-    const offerId = match[1];
-    const totalAmount = parseFloat(match[2]);
-    
-    if (isNaN(totalAmount) || totalAmount <= 0) {
-      await ctx.answerCbQuery('Importo non valido');
-      return;
-    }
-    
-    await ctx.answerCbQuery('Invio richiesta di pagamento...');
-    
-    // Recupera l'offerta
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'kwh_confirmed') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
-      return;
-    }
-    
-    // Aggiorna l'offerta con l'importo totale e lo stato
-    await offerService.updateOfferStatus(offerId, 'payment_pending', { totalAmount: totalAmount });
-    
-    // Recupera l'offerta aggiornata per avere il totalAmount salvato
-    const updatedOffer = await Offer.findById(offerId);
-    
-    // Recupera l'acquirente
-    const buyer = await User.findOne({ userId: updatedOffer.buyerId });
-    
-    // Gestisci il pagamento con saldo
-    const paymentInfo = await paymentService.handlePaymentWithBalance(updatedOffer, buyer);
-    
-    // Invia la richiesta di pagamento all'acquirente
-    await paymentService.sendPaymentRequest(updatedOffer, paymentInfo);
-    
-    await ctx.reply(`✅ Richiesta di pagamento di ${totalAmount.toFixed(2)}€ inviata all'acquirente. Riceverai una notifica quando effettuerà il pagamento.`);
-  } catch (err) {
-    logger.error(`Errore nella conferma della richiesta di pagamento:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore');
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per annullare la richiesta di pagamento
-const cancelPaymentRequestCallback = async (ctx) => {
-  try {
-    const offerId = ctx.match[1];
-    
-    await ctx.answerCbQuery('Richiesta di pagamento annullata');
-    
-    // Recupera l'offerta
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'kwh_confirmed') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
-      return;
-    }
-    
-    await ctx.reply('❌ Richiesta di pagamento annullata. Puoi inserire nuovamente il costo unitario per kWh quando sei pronto.');
-    
-    // Richiedi nuovamente il costo unitario
-    await paymentService.requestUnitPriceFromSeller(offer);
-  } catch (err) {
-    logger.error(`Errore nell'annullamento della richiesta di pagamento:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore');
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per segnalare che il pagamento è stato inviato
-const paymentSentCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'payment_pending') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
-      return;
-    }
-    
-    // Chiedi all'acquirente di specificare il metodo di pagamento
-    await ctx.reply('💳 *Specifica il metodo di pagamento utilizzato e altri dettagli utili:*\n\n_Es: PayPal, Bonifico, Cripto, Revolut, ecc._', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.paymentMethodOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella segnalazione di pagamento inviato:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per confermare la ricezione del pagamento
-const paymentConfirmedCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Recupera l'offerta
-    const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'payment_sent') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
+    // Verifica che l'offerta sia in stato charging_started
+    if (offer.status !== 'charging_started') {
+      await ctx.answerCbQuery(`L'offerta non è nello stato corretto per questa azione`, { show_alert: true });
       return;
     }
     
     // Aggiorna lo stato dell'offerta
-    await offerService.updateOfferStatus(offerId, 'completed', { completedAt: new Date() });
+    offer.status = 'charging';
+    offer.statusChangedAt = new Date();
+    await offer.save();
     
-    // Crea una nuova transazione
-    const transaction = await paymentService.createTransaction(offer);
+    // Conferma la callback query
+    await ctx.answerCbQuery('Confermato! Ora puoi ricaricare.');
     
-    // Recupera acquirente e venditore
-    const buyer = await User.findOne({ userId: offer.buyerId });
+    // Invia un messaggio all'acquirente
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Ricarica in Corso',
+      'Hai confermato che la ricarica è partita correttamente. Quando hai terminato, clicca "Ho terminato la ricarica".'
+    ), {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔋 Ho terminato la ricarica', callback_data: `charging_completed_${offerId}` }]
+        ]
+      }
+    });
+    
+    // Cerca il venditore
     const seller = await User.findOne({ userId: offer.sellerId });
     
-    // Gestisci il saldo dell'acquirente
-    if (buyer) {
-      await paymentService.handlePaymentWithBalance(offer, buyer);
+    if (seller) {
+      // Invia una notifica al venditore
+      try {
+        const buyer = await User.findOne({ userId: offer.buyerId });
+        const buyerName = buyer ? (buyer.username ? '@' + buyer.username : buyer.firstName) : 'L\'acquirente';
+        
+        await bot.telegram.sendMessage(
+          seller.userId,
+          uiElements.formatSuccessMessage(
+            'Ricarica Confermata',
+            `${buyerName} ha confermato che la ricarica è partita correttamente. Attendi il termine della ricarica.`
+          ),
+          {
+            parse_mode: 'HTML',
+            ...uiElements.mainMenuButton().reply_markup
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica al venditore ${seller.userId}:`, notifyErr);
+      }
     }
     
-    // Notifica all'acquirente
-    const buyerMessage = `
-✅ *Transazione completata* ✅
+  } catch (err) {
+    logger.error(`Errore nella callback chargingOk per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
 
-Il venditore ha confermato di aver ricevuto il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
-
-Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback al venditore utilizzando il comando /le_mie_ricariche.
-`;
+/**
+ * Gestisce la segnalazione di problemi con la ricarica
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const chargingIssuesCallback = async (ctx) => {
+  try {
+    logger.info(`Callback charging_issues ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
     
-    await offerService.notifyUserAboutOfferUpdate(offer, offer.buyerId, buyerMessage);
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
     
-    // Richiedi al venditore di fare una donazione allo sviluppatore
-    // Usa l'admin ID dalle configurazioni
-    const { ADMIN_USER_ID } = require('../config/admin');
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'ID dell'offerta nella sessione
+    ctx.session.issuesOfferId = offerId;
+    
+    // Chiedi all'utente di descrivere il problema
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, descrivi brevemente il problema che stai riscontrando con la ricarica.\n\nQuesto messaggio verrà inviato al venditore per risolvere il problema.',
+      false
+    ), {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '❌ Annulla', callback_data: `cancel_issue_${offerId}` }]
+        ]
+      }
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingIssueDescription = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback chargingIssues per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
 
-    if (!ADMIN_USER_ID) {
-      logger.warn('ADMIN_USER_ID non configurato, non possibile mostrare opzioni di donazione');
-      
-      // Messaggio senza richiesta di donazione
-      await ctx.reply(`
-✅ *Transazione completata* ✅
+/**
+ * Gestisce la segnalazione di ricarica completata
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const chargingCompletedCallback = async (ctx) => {
+  try {
+    logger.info(`Callback charging_completed ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'ID dell'offerta nella sessione
+    ctx.session.completedOfferId = offerId;
+    
+    // Chiedi quanti kWh sono stati caricati
+    await ctx.reply(uiElements.formatProgressMessage(4, 5, "Ricarica Completata") + 
+      'Per favore, inserisci quanti kWh hai caricato (es. 15.5):', {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '❌ Annulla', callback_data: `cancel_completed_${offerId}` }]
+        ]
+      }
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingKwhAmount = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback chargingCompleted per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
 
-Hai confermato di aver ricevuto il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
+/**
+ * Gestisce la conferma dei kWh caricati
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const confirmKwhCallback = async (ctx) => {
+  try {
+    logger.info(`Callback confirm_kwh ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Aggiorna lo stato dell'offerta
+    offer.status = 'kwh_confirmed';
+    offer.statusChangedAt = new Date();
+    await offer.save();
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('kWh confermati con successo!');
+    
+    // Invia un messaggio al venditore
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'kWh Confermati',
+      `Hai confermato che sono stati caricati ${offer.kwhAmount.toFixed(2)} kWh.\n\nOra inserisci l'importo totale da pagare per questa ricarica.`
+    ), {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '💶 Inserisci importo', callback_data: `set_payment_${offerId}` }]
+        ]
+      }
+    });
+    
+    // Cerca l'acquirente
+    const buyer = await User.findOne({ userId: offer.buyerId });
+    
+    if (buyer) {
+      // Invia una notifica all'acquirente
+      try {
+        const seller = await User.findOne({ userId: offer.sellerId });
+        const sellerName = seller ? (seller.username ? '@' + seller.username : seller.firstName) : 'Il venditore';
+        
+        await bot.telegram.sendMessage(
+          buyer.userId,
+          uiElements.formatSuccessMessage(
+            'kWh Confermati',
+            `${sellerName} ha confermato che hai caricato ${offer.kwhAmount.toFixed(2)} kWh. Attendi che ti comunichi l'importo da pagare.`
+          ),
+          {
+            parse_mode: 'HTML',
+            ...uiElements.mainMenuButton().reply_markup
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica all'acquirente ${buyer.userId}:`, notifyErr);
+      }
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback confirmKwh per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
 
-Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback all'acquirente utilizzando il comando /le_mie_ricariche.
-`, {
-        parse_mode: 'Markdown'
-      });
-    } else {
-      // Messaggio con richiesta di donazione
-      await ctx.reply(`
-✅ *Transazione completata* ✅
+/**
+ * Gestisce la contestazione dei kWh caricati
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const disputeKwhCallback = async (ctx) => {
+  try {
+    logger.info(`Callback dispute_kwh ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'ID dell'offerta nella sessione
+    ctx.session.disputeOfferId = offerId;
+    
+    // Chiedi all'utente di inserire il corretto numero di kWh
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, inserisci il numero corretto di kWh caricati secondo te:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingDisputeKwh = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback disputeKwh per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
 
-Hai confermato di aver ricevuto il pagamento di ${offer.totalAmount.toFixed(2)}€ per ${offer.kwhCharged} kWh.
+/**
+ * Gestisce l'impostazione del pagamento
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const setPaymentCallback = async (ctx) => {
+  try {
+    logger.info(`Callback set_payment ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica lo stato dell'offerta
+    if (offer.status !== 'kwh_confirmed') {
+      await ctx.answerCbQuery('L\'offerta non è nello stato corretto per questa azione', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'ID dell'offerta nella sessione
+    ctx.session.paymentOfferId = offerId;
+    
+    // Calcola l'importo suggerito
+    const suggestedAmount = offer.kwhAmount * offer.pricePerKwh;
+    
+    // Chiedi al venditore di inserire l'importo totale
+    await ctx.reply(uiElements.formatConfirmationMessage(
+      'Impostazione Importo Pagamento',
+      [
+        { label: 'kWh caricati', value: offer.kwhAmount.toFixed(2) },
+        { label: 'Prezzo per kWh', value: offer.pricePerKwh.toFixed(2) + '€' },
+        { label: 'Importo calcolato', value: suggestedAmount.toFixed(2) + '€' }
+      ]
+    ) + '\n\nInserisci l\'importo totale da pagare in €:', {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingPaymentAmount = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback setPayment per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
 
-Grazie per aver utilizzato il nostro servizio! Per favore, lascia un feedback all'acquirente utilizzando il comando /le_mie_ricariche.
-
-🙏 Ti piacerebbe fare una donazione allo sviluppatore del bot? Questo aiuta a mantenere e migliorare il servizio.
-`, {
-        parse_mode: 'Markdown',
+/**
+ * Gestisce la verifica del pagamento
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const verifyPaymentCallback = async (ctx) => {
+  try {
+    logger.info(`Callback verify_payment ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica lo stato dell'offerta
+    if (offer.status !== 'payment_pending' && offer.status !== 'payment_sent') {
+      await ctx.answerCbQuery('L\'offerta non è nello stato corretto per questa azione', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Verifica se il pagamento è già stato inviato
+    if (offer.status === 'payment_sent') {
+      // Chiedi al venditore di confermare il pagamento
+      await ctx.reply(uiElements.formatConfirmationMessage(
+        'Verifica Pagamento',
+        [
+          { label: 'Importo', value: offer.totalAmount.toFixed(2) + '€' },
+          { label: 'Stato pagamento', value: 'Segnalato come inviato dall\'acquirente' }
+        ]
+      ), {
+        parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '🎁 Dona 2 kWh', callback_data: `donate_2_${offerId}` },
-              { text: '🎁 Altra quantità', callback_data: `donate_custom_${offerId}` }
-            ],
-            [{ text: '👍 No, grazie', callback_data: `donate_skip_${offerId}` }]
+              { text: '✅ Confermo pagamento ricevuto', callback_data: `payment_confirmed_${offerId}` },
+              { text: '❌ Non ho ricevuto', callback_data: `payment_not_received_${offerId}` }
+            ]
           ]
         }
       });
+    } else {
+      // Mostra i dettagli di pagamento al venditore
+      await ctx.reply(uiElements.formatConfirmationMessage(
+        'Dettagli Pagamento',
+        [
+          { label: 'Importo', value: offer.totalAmount.toFixed(2) + '€' },
+          { label: 'Stato pagamento', value: 'In attesa' },
+          { label: 'Metodo di pagamento', value: offer.paymentMethod || 'Non specificato' },
+          { label: 'Dettagli', value: offer.paymentDetails || 'Nessun dettaglio specificato' }
+        ]
+      ) + '\n\nAttendi che l\'acquirente effettui il pagamento o contattalo direttamente.', {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
     }
+    
   } catch (err) {
-    console.error('Errore nella conferma del pagamento:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+    logger.error(`Errore nella callback verifyPayment per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
   }
 };
 
-// Handler per segnalare mancata ricezione del pagamento
-const paymentNotReceivedCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
+/**
+ * Gestisce la conferma di richiesta di pagamento
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const confirmPaymentRequestCallback = async (ctx) => {
   try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Chiedi il motivo della contestazione
-    await ctx.reply('📝 *Specifica perché non hai ricevuto il pagamento o cosa c\'è di sbagliato:*', {
-      parse_mode: 'Markdown'
+    logger.info(`Callback confirm_payment_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
     });
     
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.paymentDisputeOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella segnalazione di mancato pagamento:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per lasciare un feedback positivo
-const feedbackPositiveCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
+    // Estrai l'ID dell'offerta e l'importo dalla callback data
+    const parts = ctx.callbackQuery.data.split('_');
+    const offerId = parts[2];
+    const amount = parseFloat(parts[3]);
     
-    // Chiedi un commento per il feedback
-    await ctx.reply('🌟 *Grazie per il tuo feedback positivo!*\n\n_Vuoi aggiungere un breve commento? (o scrivi "nessuno" se preferisci non lasciare commenti)_', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta e il tipo di feedback in un contesto per l'handler successivo
-    ctx.session.feedbackOfferId = offerId;
-    ctx.session.feedbackType = 'positive';
-  } catch (err) {
-    console.error('Errore nel feedback positivo:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per lasciare un feedback negativo
-const feedbackNegativeCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Chiedi un commento per il feedback
-    await ctx.reply('😔 *Ci dispiace che la tua esperienza non sia stata positiva.*\n\n_Per favore, spiega brevemente cosa è andato storto:_', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta e il tipo di feedback in un contesto per l'handler successivo
-    ctx.session.feedbackOfferId = offerId;
-    ctx.session.feedbackType = 'negative';
-  } catch (err) {
-    console.error('Errore nel feedback negativo:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per annullare una carica
-const cancelChargeCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
-    // Chiedi il motivo dell'annullamento
-    await ctx.reply('📝 *Per quale motivo stai annullando questa ricarica?*', {
-      parse_mode: 'Markdown'
-    });
-    
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.cancelChargeOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nell\'annullamento della ricarica:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per donare 2 kWh
-const donateFixedCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
-    
+    // Cerca l'offerta
     const offer = await Offer.findById(offerId);
-    if (!offer || offer.status !== 'completed') {
-      await ctx.reply('❌ Questa ricarica non è più disponibile o non è nello stato corretto.');
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
       return;
     }
     
-    // Usa l'ID admin dalle configurazioni invece di hardcodarlo
-    const { ADMIN_USER_ID } = require('../config/admin');
-    
-    // Se l'admin ID non è configurato, avvisa l'utente
-    if (!ADMIN_USER_ID) {
-      logger.error('ADMIN_USER_ID non configurato nelle variabili d\'ambiente');
-      await ctx.reply('❌ Impossibile elaborare la donazione: configurazione amministratore mancante. Contatta il supporto.');
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
       return;
     }
     
-    // Recupera gli utenti
+    // Aggiorna l'offerta con l'importo e lo stato
+    offer.totalAmount = amount;
+    offer.status = 'payment_pending';
+    offer.statusChangedAt = new Date();
+    await offer.save();
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Richiesta di pagamento inviata!');
+    
+    // Ora chiedi al venditore di specificare i dettagli di pagamento
+    ctx.session.paymentDetailsOfferId = offerId;
+    
+    await ctx.reply('Ora specifica il metodo di pagamento preferito (es. Bonifico, PayPal, Satispay, etc.):', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Bonifico bancario', callback_data: 'payment_method_bank' }],
+          [{ text: 'PayPal', callback_data: 'payment_method_paypal' }],
+          [{ text: 'Satispay', callback_data: 'payment_method_satispay' }],
+          [{ text: 'Contanti', callback_data: 'payment_method_cash' }],
+          [{ text: 'Altro (specifica)', callback_data: 'payment_method_other' }]
+        ]
+      }
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback confirmPaymentRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento della richiesta di pagamento
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelPaymentRequestCallback = async (ctx) => {
+  try {
+    logger.info(`Callback cancel_payment_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Richiesta di pagamento annullata');
+    
+    // Chiedi nuovamente l'importo
+    ctx.session.paymentOfferId = offerId;
+    
+    await ctx.reply('Per favore, inserisci un nuovo importo totale da pagare in €:', {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingPaymentAmount = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback cancelPaymentRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la segnalazione di pagamento inviato
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const paymentSentCallback = async (ctx) => {
+  try {
+    logger.info(`Callback payment_sent ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente
+    if (offer.buyerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica lo stato dell'offerta
+    if (offer.status !== 'payment_pending') {
+      await ctx.answerCbQuery('L\'offerta non è nello stato corretto per questa azione', { show_alert: true });
+      return;
+    }
+    
+    // Aggiorna lo stato dell'offerta
+    offer.status = 'payment_sent';
+    offer.statusChangedAt = new Date();
+    await offer.save();
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Segnalazione di pagamento inviata!');
+    
+    // Invia un messaggio all'acquirente
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Pagamento Segnalato',
+      `Hai segnalato di aver effettuato il pagamento di ${offer.totalAmount.toFixed(2)}€. Attendi la conferma del venditore.`
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+    // Cerca il venditore
     const seller = await User.findOne({ userId: offer.sellerId });
     
-    // Verifica se l'utente admin esiste
-    const adminExists = await User.findOne({ userId: ADMIN_USER_ID });
-    if (!adminExists) {
-      logger.error(`Admin con ID ${ADMIN_USER_ID} non registrato nel sistema. Creazione account admin automatica.`);
-      // Crea automaticamente l'account admin se non esiste
-      const newAdmin = new User({
-        userId: ADMIN_USER_ID,
-        username: 'admin',
-        firstName: 'Administrator',
-        balance: 0
-      });
-      await newAdmin.save();
-      logger.info(`Account admin creato automaticamente con ID ${ADMIN_USER_ID}`);
+    if (seller) {
+      // Invia una notifica al venditore
+      try {
+        const buyer = await User.findOne({ userId: offer.buyerId });
+        const buyerName = buyer ? (buyer.username ? '@' + buyer.username : buyer.firstName) : 'L\'acquirente';
+        
+        await bot.telegram.sendMessage(
+          seller.userId,
+          uiElements.formatSuccessMessage(
+            'Pagamento Segnalato',
+            `${buyerName} ha segnalato di aver effettuato il pagamento di ${offer.totalAmount.toFixed(2)}€. Verifica di averlo ricevuto.`
+          ),
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Confermo pagamento ricevuto', callback_data: `payment_confirmed_${offerId}` },
+                  { text: '❌ Non ho ricevuto', callback_data: `payment_not_received_${offerId}` }
+                ]
+              ]
+            }
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica al venditore ${seller.userId}:`, notifyErr);
+      }
     }
     
-    // Crea la donazione
-    const donation = await paymentService.createDonation(seller.userId, ADMIN_USER_ID, 2);
-    
-    // Notifica all'utente
-    await ctx.reply('🙏 *Grazie per la tua donazione di 2 kWh!*\n\nIl tuo contributo aiuta a mantenere e migliorare il servizio.', {
-      parse_mode: 'Markdown'
+  } catch (err) {
+    logger.error(`Errore nella callback paymentSent per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la conferma di pagamento ricevuto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const paymentConfirmedCallback = async (ctx) => {
+  try {
+    logger.info(`Callback payment_confirmed ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
     });
     
-    // Notifica all'admin
-    await paymentService.notifyAdminAboutDonation(donation, seller);
-  } catch (err) {
-    console.error('Errore nella donazione:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per donare una quantità personalizzata
-const donateCustomCallback = async (ctx) => {
-  const offerId = ctx.match[1];
-  
-  try {
-    await ctx.answerCbQuery('Elaborazione in corso...');
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
     
-    await ctx.reply('🎁 *Quanti kWh vorresti donare?*\n\n_Inserisci un numero, ad esempio 5_', {
-      parse_mode: 'Markdown'
-    });
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
     
-    // Salva l'ID dell'offerta in un contesto per l'handler successivo
-    ctx.session.donateCustomOfferId = offerId;
-  } catch (err) {
-    console.error('Errore nella richiesta di donazione personalizzata:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per saltare la donazione
-const donateSkipCallback = async (ctx) => {
-  try {
-    await ctx.answerCbQuery('Donazione saltata');
-    await ctx.reply('👍 Nessun problema! Grazie per aver utilizzato il nostro servizio.');
-  } catch (err) {
-    console.error('Errore nel saltare la donazione:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-  }
-};
-
-// Handler per inviare richiesta manuale di ricarica
-const sendManualRequestCallback = async (ctx) => {
-  try {
-    await ctx.answerCbQuery('Invio richiesta in corso...');
-    
-    const buyer = await userService.registerUser(ctx.from);
-    const seller = await User.findOne({ userId: ctx.session.manualChargeSellerId });
-    
-    if (!seller) {
-      await ctx.reply('❌ Venditore non trovato.');
-      // Pulisci il contesto
-      Object.keys(ctx.session).forEach(key => {
-        if (key.startsWith('manualCharge')) {
-          delete ctx.session[key];
-        }
-      });
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
       return;
     }
     
-    // Prepara i dati dell'offerta
-    const offerData = {
-      buyerId: buyer.userId,
-      sellerId: seller.userId,
-      date: ctx.session.manualChargeDate,
-      time: ctx.session.manualChargeTime,
-      brand: ctx.session.manualChargeBrand,
-      coordinates: ctx.session.manualChargeCoordinates,
-      additionalInfo: ctx.session.manualChargeInfo
-    };
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
     
-    // Crea una nuova offerta senza annuncio collegato
-    const newOffer = await offerService.createOffer(offerData);
+    // Verifica lo stato dell'offerta
+    if (offer.status !== 'payment_sent') {
+      await ctx.answerCbQuery('L\'offerta non è nello stato corretto per questa azione', { show_alert: true });
+      return;
+    }
     
-    // Notifica il venditore
-    await offerService.notifySellerAboutOffer(newOffer, buyer);
+    // Aggiorna lo stato dell'offerta
+    offer.status = 'completed';
+    offer.statusChangedAt = new Date();
+    offer.completedAt = new Date();
+    await offer.save();
     
-    await ctx.reply('✅ *La tua richiesta è stata inviata al venditore!*\n\nRiceverai una notifica quando risponderà.', {
-      parse_mode: 'Markdown'
+    // Crea una transazione
+    const transaction = await transactionService.createTransaction(
+      offer.buyerId,
+      offer.sellerId,
+      offer.kwhAmount,
+      offer.pricePerKwh,
+      offer.totalAmount,
+      offer._id
+    );
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Pagamento confermato! Procedura completata.');
+    
+    // Invia un messaggio al venditore
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Pagamento Confermato',
+      `Hai confermato di aver ricevuto il pagamento di ${offer.totalAmount.toFixed(2)}€. La ricarica è stata completata con successo!`
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
     });
     
-    // Pulisci il contesto
-    Object.keys(ctx.session).forEach(key => {
-      if (key.startsWith('manualCharge')) {
-        delete ctx.session[key];
+    // Cerca l'acquirente
+    const buyer = await User.findOne({ userId: offer.buyerId });
+    
+    if (buyer) {
+      // Invia una notifica all'acquirente
+      try {
+        const seller = await User.findOne({ userId: offer.sellerId });
+        const sellerName = seller ? (seller.username ? '@' + seller.username : seller.firstName) : 'Il venditore';
+        
+        await bot.telegram.sendMessage(
+          buyer.userId,
+          uiElements.formatSuccessMessage(
+            'Pagamento Confermato',
+            `${sellerName} ha confermato di aver ricevuto il tuo pagamento di ${offer.totalAmount.toFixed(2)}€. La ricarica è stata completata con successo!`
+          ),
+          {
+            parse_mode: 'HTML',
+            ...uiElements.mainMenuButton().reply_markup
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica all'acquirente ${buyer.userId}:`, notifyErr);
       }
-    });
+    }
+    
+    // Verifica se è una ricarica con l'admin e crea una donazione se necessario
+    if (offer.sellerId !== ADMIN_USER_ID && offer.buyerId === ADMIN_USER_ID) {
+      try {
+        // L'admin è l'acquirente e il privato è il venditore, creiamo una donazione
+        await donationService.createDonation(offer.sellerId, ADMIN_USER_ID, offer.kwhAmount, offer._id);
+        
+        // Notifica al venditore della donazione
+        const sellerUser = await User.findOne({ userId: offer.sellerId });
+        
+        if (sellerUser) {
+          await bot.telegram.sendMessage(
+            sellerUser.userId,
+            uiElements.formatSuccessMessage(
+              'Donazione Effettuata',
+              `Hai donato ${offer.kwhAmount.toFixed(2)} kWh all'amministratore. Questo credito sarà disponibile per le prossime ricariche che l'amministratore effettuerà presso di te.`
+            ),
+            {
+              parse_mode: 'HTML',
+              ...uiElements.mainMenuButton().reply_markup
+            }
+          );
+        }
+      } catch (donationErr) {
+        logger.error(`Errore nella creazione della donazione per la ricarica ${offerId}:`, donationErr);
+      }
+    }
+    
+    // Chiedi feedback
+    setTimeout(async () => {
+      try {
+        // Chiedi feedback all'acquirente
+        await bot.telegram.sendMessage(
+          offer.buyerId,
+          'Come valuti questa ricarica? Il tuo feedback aiuta altri utenti a scegliere i venditori migliori.',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '👍 Positivo', callback_data: `feedback_positive_${offerId}` },
+                  { text: '👎 Negativo', callback_data: `feedback_negative_${offerId}` }
+                ]
+              ]
+            }
+          }
+        );
+        
+        // Chiedi feedback al venditore
+        await bot.telegram.sendMessage(
+          offer.sellerId,
+          'Come valuti questo acquirente? Il tuo feedback aiuta altri venditori a decidere se accettare future richieste.',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '👍 Positivo', callback_data: `feedback_positive_${offerId}` },
+                  { text: '👎 Negativo', callback_data: `feedback_negative_${offerId}` }
+                ]
+              ]
+            }
+          }
+        );
+      } catch (feedbackErr) {
+        logger.error(`Errore nell'invio della richiesta di feedback per l'offerta ${offerId}:`, feedbackErr);
+      }
+    }, 30000); // Chiedi feedback dopo 30 secondi
+    
+    // Chiedi al venditore se vuole donare kWh all'admin (tranne se l'admin è l'acquirente)
+    if (offer.buyerId !== ADMIN_USER_ID && ADMIN_USER_ID) {
+      setTimeout(async () => {
+        try {
+          await bot.telegram.sendMessage(
+            offer.sellerId,
+            `🎁 <b>Vuoi donare un po' di kWh all'amministratore?</b>\n\nLe donazioni permettono all'amministratore di mantenere attivo e migliorare questo servizio. Quando l'amministratore vorrà ricaricare presso di te, il credito donato verrà utilizzato automaticamente.`,
+            {
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '🎁 Dona 2 kWh', callback_data: `donate_2_${offerId}` },
+                    { text: '🎁 Altra quantità', callback_data: `donate_custom_${offerId}` }
+                  ],
+                  [{ text: '👍 No, grazie', callback_data: `donate_skip_${offerId}` }]
+                ]
+              }
+            }
+          );
+        } catch (donationPromptErr) {
+          logger.error(`Errore nell'invio della richiesta di donazione per l'offerta ${offerId}:`, donationPromptErr);
+        }
+      }, 60000); // Chiedi donazione dopo 1 minuto
+    }
+    
   } catch (err) {
-    console.error('Errore nell\'invio della richiesta manuale:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-    // Pulisci il contesto
-    Object.keys(ctx.session).forEach(key => {
-      if (key.startsWith('manualCharge')) {
-        delete ctx.session[key];
-      }
-    });
+    logger.error(`Errore nella callback paymentConfirmed per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
   }
 };
 
-// Handler per annullare la richiesta manuale
+/**
+ * Gestisce la segnalazione di pagamento non ricevuto
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const paymentNotReceivedCallback = async (ctx) => {
+  try {
+    logger.info(`Callback payment_not_received ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[3];
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'ID dell'offerta nella sessione
+    ctx.session.paymentNotReceivedOfferId = offerId;
+    
+    // Chiedi al venditore di specificare il problema
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, descrivi il problema con il pagamento. Questo messaggio verrà inviato all\'acquirente:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingPaymentIssueDescription = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback paymentNotReceived per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il feedback positivo
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const feedbackPositiveCallback = async (ctx) => {
+  try {
+    logger.info(`Callback feedback_positive ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente o il venditore
+    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Determina se l'utente è l'acquirente o il venditore
+    const isbuyer = (offer.buyerId === ctx.from.id);
+    
+    // Verifica se l'utente ha già lasciato un feedback
+    if (isbuyer && offer.buyerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    if (!isbuyer && offer.sellerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Aggiorna l'offerta con il feedback
+    if (isbuyer) {
+      offer.buyerFeedback = 'positive';
+    } else {
+      offer.sellerFeedback = 'positive';
+    }
+    await offer.save();
+    
+    // Aggiorna la valutazione dell'utente
+    const targetUserId = isbuyer ? offer.sellerId : offer.buyerId;
+    const targetUser = await User.findOne({ userId: targetUserId });
+    
+    if (targetUser) {
+      targetUser.positiveRatings = (targetUser.positiveRatings || 0) + 1;
+      targetUser.totalRatings = (targetUser.totalRatings || 0) + 1;
+      await targetUser.save();
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Feedback positivo registrato!');
+    
+    // Invia un messaggio di conferma
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Feedback Inviato',
+      `Hai lasciato un feedback positivo per questa ricarica. Grazie per aver contribuito alla reputazione dell'utente!`
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+    // Notifica l'utente che ha ricevuto il feedback
+    try {
+      const sender = await User.findOne({ userId: ctx.from.id });
+      const senderName = sender ? (sender.username ? '@' + sender.username : sender.firstName) : 'Un utente';
+      
+      await bot.telegram.sendMessage(
+        targetUserId,
+        uiElements.formatSuccessMessage(
+          'Hai ricevuto un feedback positivo',
+          `${senderName} ha lasciato un feedback positivo per la vostra ricarica. La tua reputazione è aumentata!`
+        ),
+        {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        }
+      );
+    } catch (notifyErr) {
+      logger.error(`Errore nella notifica del feedback all'utente ${targetUserId}:`, notifyErr);
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback feedbackPositive per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il feedback negativo
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const feedbackNegativeCallback = async (ctx) => {
+  try {
+    logger.info(`Callback feedback_negative ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente o il venditore
+    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Determina se l'utente è l'acquirente o il venditore
+    const isbuyer = (offer.buyerId === ctx.from.id);
+    
+    // Verifica se l'utente ha già lasciato un feedback
+    if (isbuyer && offer.buyerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    if (!isbuyer && offer.sellerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza nella sessione per raccogliere la motivazione
+    ctx.session.negativeFeedbackOfferId = offerId;
+    ctx.session.negativeFeedbackIsbuyer = isbuyer;
+    
+    // Chiedi la motivazione
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, indica brevemente il motivo del feedback negativo:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingNegativeFeedbackReason = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback feedbackNegative per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento di una ricarica
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelChargeCallback = async (ctx) => {
+  try {
+    logger.info(`Callback cancel_charge ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente o il venditore
+    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta non sia già completata o cancellata
+    if (offer.status === 'completed' || offer.status === 'cancelled') {
+      await ctx.answerCbQuery(`L'offerta è già ${offer.status === 'completed' ? 'completata' : 'cancellata'}`, { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza nella sessione per raccogliere la motivazione
+    ctx.session.cancelChargeOfferId = offerId;
+    
+    // Chiedi la motivazione
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, indica brevemente il motivo dell\'annullamento:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingCancelChargeReason = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback cancelCharge per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la donazione di una quantità fissa di kWh
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const donateFixedCallback = async (ctx) => {
+  try {
+    logger.info(`Callback donate_fixed ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a fare donazioni per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia completata
+    if (offer.status !== 'completed') {
+      await ctx.answerCbQuery('Puoi donare solo per offerte completate', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'ADMIN_USER_ID sia configurato
+    if (!ADMIN_USER_ID) {
+      await ctx.answerCbQuery('Admin non configurato. Impossibile donare.', { show_alert: true });
+      return;
+    }
+    
+    const donationAmount = 2; // kWh fissi
+    
+    // Crea la donazione
+    try {
+      await donationService.createDonation(offer.sellerId, ADMIN_USER_ID, donationAmount, offer._id);
+      
+      // Conferma la callback query
+      await ctx.answerCbQuery('Donazione effettuata con successo!');
+      
+      // Invia un messaggio di conferma al venditore
+      await ctx.reply(uiElements.formatSuccessMessage(
+        'Donazione Effettuata',
+        `Hai donato ${donationAmount.toFixed(2)} kWh all'amministratore. Questo credito sarà disponibile per le prossime ricariche che l'amministratore effettuerà presso di te.\n\nGrazie per il tuo supporto!`
+      ), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      
+      // Notifica l'amministratore
+      try {
+        const seller = await User.findOne({ userId: offer.sellerId });
+        const sellerName = seller ? (seller.username ? '@' + seller.username : seller.firstName) : 'Un venditore';
+        
+        await bot.telegram.sendMessage(
+          ADMIN_USER_ID,
+          uiElements.formatSuccessMessage(
+            'Donazione Ricevuta',
+            `${sellerName} ha donato ${donationAmount.toFixed(2)} kWh al tuo account. Questo credito sarà disponibile per le tue prossime ricariche presso questo venditore.\n\nUsa /le_mie_donazioni per vedere tutte le donazioni ricevute.`
+          ),
+          {
+            parse_mode: 'HTML',
+            ...uiElements.mainMenuButton().reply_markup
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica all'admin ${ADMIN_USER_ID} della donazione:`, notifyErr);
+      }
+      
+    } catch (donationErr) {
+      logger.error(`Errore nella creazione della donazione:`, donationErr);
+      await ctx.answerCbQuery('Si è verificato un errore durante la donazione', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback donateFixed per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la donazione di una quantità personalizzata di kWh
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const donateCustomCallback = async (ctx) => {
+  try {
+    logger.info(`Callback donate_custom ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a fare donazioni per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia completata
+    if (offer.status !== 'completed') {
+      await ctx.answerCbQuery('Puoi donare solo per offerte completate', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'ADMIN_USER_ID sia configurato
+    if (!ADMIN_USER_ID) {
+      await ctx.answerCbQuery('Admin non configurato. Impossibile donare.', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'offerta ID nella sessione
+    ctx.session.donateCustomOfferId = offerId;
+    
+    // Chiedi la quantità
+    await ctx.reply(uiElements.formatConfirmationMessage(
+      'Donazione Personalizzata',
+      [
+        { label: 'Transazione', value: `ID: ${offerId}` },
+        { label: 'kWh caricati', value: `${offer.kwhAmount.toFixed(2)} kWh` }
+      ]
+    ) + '\n\nInserisci la quantità di kWh che vuoi donare (es. 1.5):', {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingDonationAmount = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback donateCustom per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il salto della donazione
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const donateSkipCallback = async (ctx) => {
+  try {
+    logger.info(`Callback donate_skip ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Nessun problema! Grazie comunque.');
+    
+    // Invia un messaggio di ringraziamento
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Nessuna Donazione',
+      'Hai scelto di non donare kWh all\'amministratore. Nessun problema, grazie comunque per aver usato il servizio!'
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback donateSkip per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'invio di una richiesta manuale
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const sendManualRequestCallback = async (ctx) => {
+  try {
+    logger.info(`Callback send_manual_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che l'utente sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Solo l\'amministratore può usare questa funzione', { show_alert: true });
+      return;
+    }
+    
+    // Recupera i dati dalla sessione
+    const {
+      manualChargeSellerId,
+      manualChargeDate,
+      manualChargeTime,
+      manualChargeLocation,
+      manualChargeKwh,
+      manualChargeConnector
+    } = ctx.session;
+    
+    if (!manualChargeSellerId || !manualChargeDate || !manualChargeTime || !manualChargeKwh) {
+      await ctx.answerCbQuery('Dati incompleti. Riprova.', { show_alert: true });
+      return;
+    }
+    
+    // Cerca il venditore
+    const seller = await User.findOne({ userId: manualChargeSellerId });
+    
+    if (!seller) {
+      await ctx.answerCbQuery('Venditore non trovato', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    try {
+      // Recupera annuncio attivo del venditore (se disponibile)
+      const announcement = await Announcement.findOne({
+        userId: manualChargeSellerId,
+        status: 'active',
+        type: 'sell'
+      });
+      
+      // Prezzo di default se non c'è un annuncio
+      const pricePerKwh = announcement ? announcement.pricePerKwh : 0.40;
+      
+      // Crea la nuova offerta
+      const newOffer = new Offer({
+        buyerId: ctx.from.id,
+        sellerId: manualChargeSellerId,
+        status: 'pending',
+        createdAt: new Date(),
+        statusChangedAt: new Date(),
+        pricePerKwh: pricePerKwh,
+        kwhAmount: parseFloat(manualChargeKwh),
+        totalAmount: parseFloat(manualChargeKwh) * pricePerKwh,
+        chargeDate: `${manualChargeDate} ${manualChargeTime}`,
+        additionalInfo: `Richiesta diretta dall'amministratore. Luogo: ${manualChargeLocation || 'Non specificato'}`,
+        connectorType: manualChargeConnector || 'Non specificato'
+      });
+      
+      await newOffer.save();
+      
+      // Pulisci la sessione
+      delete ctx.session.manualChargeSellerId;
+      delete ctx.session.manualChargeDate;
+      delete ctx.session.manualChargeTime;
+      delete ctx.session.manualChargeLocation;
+      delete ctx.session.manualChargeKwh;
+      delete ctx.session.manualChargeConnector;
+      
+      // Invia conferma all'admin
+      await ctx.reply(uiElements.formatSuccessMessage(
+        'Richiesta Inviata',
+        `La tua richiesta di ricarica di ${manualChargeKwh} kWh è stata inviata a ${seller.username ? '@' + seller.username : seller.firstName}.`
+      ), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      
+      // Notifica il venditore
+      try {
+        const admin = await User.findOne({ userId: ctx.from.id });
+        const adminName = admin ? (admin.username ? '@' + admin.username : admin.firstName) : 'L\'amministratore';
+        
+        await bot.telegram.sendMessage(
+          seller.userId,
+          uiElements.formatSuccessMessage(
+            'Nuova Richiesta di Ricarica',
+            `${adminName} ha richiesto di ricaricare ${manualChargeKwh} kWh presso di te il ${manualChargeDate} alle ${manualChargeTime}.`
+          ),
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Accetta', callback_data: `accept_offer_${newOffer._id}` },
+                  { text: '❌ Rifiuta', callback_data: `reject_offer_${newOffer._id}` }
+                ]
+              ]
+            }
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica al venditore ${seller.userId}:`, notifyErr);
+      }
+      
+    } catch (createErr) {
+      logger.error('Errore nella creazione dell\'offerta manuale:', createErr);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore nella creazione dell\'offerta. Riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback sendManualRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento di una richiesta manuale
+ * @param {Object} ctx - Contesto Telegraf
+ */
 const cancelManualRequestCallback = async (ctx) => {
   try {
-    await ctx.answerCbQuery('Richiesta annullata');
-    await ctx.reply('❌ Richiesta annullata.');
+    logger.info(`Callback cancel_manual_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
     
-    // Pulisci il contesto
-    Object.keys(ctx.session).forEach(key => {
-      if (key.startsWith('manualCharge')) {
-        delete ctx.session[key];
-      }
+    // Conferma la callback query
+    await ctx.answerCbQuery('Richiesta annullata');
+    
+    // Pulisci la sessione
+    delete ctx.session.manualChargeSellerId;
+    delete ctx.session.manualChargeDate;
+    delete ctx.session.manualChargeTime;
+    delete ctx.session.manualChargeLocation;
+    delete ctx.session.manualChargeKwh;
+    delete ctx.session.manualChargeConnector;
+    
+    // Invia messaggio di conferma
+    await ctx.reply(uiElements.formatErrorMessage('Richiesta di ricarica annullata.', false), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
     });
+    
   } catch (err) {
-    console.error('Errore nell\'annullamento della richiesta manuale:', err);
-    await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-    // Pulisci il contesto
-    Object.keys(ctx.session).forEach(key => {
-      if (key.startsWith('manualCharge')) {
-        delete ctx.session[key];
+    logger.error(`Errore nella callback cancelManualRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce le callback di paginazione per le liste
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const handlePaginationCallback = async (ctx) => {
+  try {
+    // Estrai i dati dalla callback query
+    const callbackData = ctx.callbackQuery.data;
+    const [baseData, direction, currentPage] = callbackData.split('_');
+    
+    // Calcola la nuova pagina
+    const page = parseInt(currentPage);
+    const newPage = direction === 'next' ? page + 1 : page - 1;
+    
+    if (newPage < 1) {
+      await ctx.answerCbQuery('Sei già alla prima pagina');
+      return;
+    }
+    
+    // Aggiorna la pagina nella sessione
+    ctx.session[`${baseData}Page`] = newPage;
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // A seconda del tipo di dati da paginare, chiama il comando appropriato
+    switch (baseData) {
+      case 'transactions':
+        return await commands.myTransactionsCommand(ctx);
+      case 'offers':
+        return await commands.myChargesCommand(ctx);
+      case 'partners':
+        return await commands.myPartnersCommand(ctx);
+      case 'wallet':
+        return await commands.walletDetailsCommand(ctx);
+      case 'donation':
+        return await commands.myDonationsCommand(ctx);
+      default:
+        await ctx.answerCbQuery('Paginazione non supportata per questo tipo di dati');
+    }
+  } catch (err) {
+    logger.error('Errore nella gestione della paginazione:', err);
+    await ctx.answerCbQuery('Errore nella paginazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce tutte le callback del menu
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const handleMenuCallback = async (ctx) => {
+  try {
+    const callbackData = ctx.callbackQuery.data;
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Gestisci le callback in base al prefisso
+    if (callbackData.startsWith('wallet_')) {
+      // Callback del portafoglio
+      switch (callbackData) {
+        case 'wallet_sell':
+          return await commands.sellKwhCommand(ctx);
+        case 'wallet_buy':
+          // Qui dovresti implementare la funzionalità per comprare kWh
+          return await ctx.reply('Funzionalità in fase di implementazione');
+        case 'wallet_stats':
+          return await commands.walletStatsCommand(ctx);
+        case 'wallet_transactions':
+          return await commands.myTransactionsCommand(ctx);
       }
-    });
+    } else if (callbackData.startsWith('admin_')) {
+      // Callback del menu admin
+      switch (callbackData) {
+        case 'admin_donations':
+          return await commands.myDonationsCommand(ctx);
+        case 'admin_update_commands':
+          return await commands.updateBotCommandsCommand(ctx);
+        case 'admin_system_checkup':
+          return await commands.systemCheckupCommand(ctx);
+        case 'admin_db_stats':
+          // Simuliamo il comando db_admin stats
+          ctx.message = { text: '/db_admin stats' };
+          return await commands.dbAdminCommand(ctx);
+      }
+    } else if (callbackData === 'back_to_main') {
+      // Torna al menu principale
+      const { createInlineMenus } = require('../utils/commandLoader');
+      await createInlineMenus(ctx.from.id, isAdmin(ctx.from.id));
+      
+      // Eliminiamo il messaggio precedente per evitare confusione
+      try {
+        await ctx.deleteMessage();
+      } catch (err) {
+        logger.warn(`Impossibile eliminare il messaggio del menu:`, err);
+      }
+    } else if (callbackData.startsWith('refresh_')) {
+      // Gestisci i callback di aggiornamento
+      const refreshType = callbackData.split('_')[1];
+      const id = callbackData.split('_')[2];
+      
+      switch (refreshType) {
+        case 'partner':
+          ctx.message = { text: `/portafoglio_partner ${id}` };
+          return await commands.partnerWalletCommand(ctx);
+        case 'vendor':
+          ctx.message = { text: `/portafoglio_venditore ${id}` };
+          return await commands.vendorWalletCommand(ctx);
+        case 'donations':
+          return await commands.myDonationsCommand(ctx);
+      }
+    } else if (callbackData === 'recheck_admin') {
+      return await commands.checkAdminConfigCommand(ctx);
+    } else if (callbackData === 'create_admin_now') {
+      return await commands.createAdminAccountCommand(ctx);
+    } else if (callbackData === 'system_checkup_again') {
+      return await commands.systemCheckupCommand(ctx);
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback di menu per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
   }
 };
 
 module.exports = {
+  buyKwhCallback,
+  startBuyCallback,
   connectorTypeCallback,
   publishSellCallback,
   cancelSellCallback,
-  buyKwhCallback,
-  startBuyCallback,
   acceptConditionsCallback,
   cancelBuyCallback,
   sendRequestCallback,
@@ -1077,6 +2176,7 @@ module.exports = {
   confirmKwhCallback,
   disputeKwhCallback,
   setPaymentCallback,
+  verifyPaymentCallback,
   confirmPaymentRequestCallback,
   cancelPaymentRequestCallback,
   paymentSentCallback,
@@ -1090,5 +2190,6 @@ module.exports = {
   donateSkipCallback,
   sendManualRequestCallback,
   cancelManualRequestCallback,
-  verifyPaymentCallback // Aggiunta la nuova callback
+  handlePaginationCallback,
+  handleMenuCallback
 };
