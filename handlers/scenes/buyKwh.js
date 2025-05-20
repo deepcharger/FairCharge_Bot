@@ -5,12 +5,22 @@ const userService = require('../../services/userService');
 const offerService = require('../../services/offerService');
 const Announcement = require('../../models/announcement');
 const User = require('../../models/user');
-const { formatSellAnnouncementSafe, sanitizeMarkdown } = require('../../utils/formatters');
+const { formatSellAnnouncement } = require('../../utils/formatters');
 const logger = require('../../utils/logger');
+const uiElements = require('../../utils/uiElements');
 
-// Crea la scena per il wizard
-const buyKwhScene = new Scenes.WizardScene(
+// Step totali nel wizard
+const TOTAL_STEPS = 6;
+
+// Funzione per mostrare il progresso
+const showProgress = (step, title) => {
+  return uiElements.formatProgressMessage(step, TOTAL_STEPS, title);
+};
+
+// Creazione dello wizard per l'acquisto di kWh
+const buyKwhWizard = new Scenes.WizardScene(
   'BUY_KWH_WIZARD',
+  
   // Passo 1: Mostra l'annuncio selezionato e chiede conferma
   async (ctx) => {
     try {
@@ -18,13 +28,24 @@ const buyKwhScene = new Scenes.WizardScene(
       const announcementId = ctx.session.announcementId || (ctx.wizard.state && ctx.wizard.state.announcementId);
       
       if (!announcementId) {
-        await ctx.reply('❌ Nessun annuncio selezionato. Riprova dalla chat di gruppo.');
+        await ctx.reply(uiElements.formatErrorMessage('Nessun annuncio selezionato. Riprova dalla chat di gruppo.', true), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
         return ctx.scene.leave();
       }
       
       // Memorizza l'ID nel wizard state
       ctx.wizard.state = ctx.wizard.state || {};
       ctx.wizard.state.announcementId = announcementId;
+      
+      // Inizializza lo stato della sessione
+      ctx.session.buyWizardState = {
+        step: 1,
+        data: {
+          announcementId: announcementId
+        }
+      };
       
       // Pulisci l'ID dalla sessione per evitare problemi in future interazioni
       if (ctx.session.announcementId) {
@@ -34,331 +55,543 @@ const buyKwhScene = new Scenes.WizardScene(
       // Trova l'annuncio
       const announcement = await Announcement.findById(announcementId);
       if (!announcement || announcement.status !== 'active') {
-        await ctx.reply('❌ L\'annuncio non è più disponibile.');
+        await ctx.reply(uiElements.formatErrorMessage('L\'annuncio non è più disponibile.', true), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
         return ctx.scene.leave();
       }
       
       // Trova il venditore
       const seller = await User.findOne({ userId: announcement.userId });
       if (!seller) {
-        await ctx.reply('❌ Si è verificato un errore. Venditore non trovato.');
+        await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Venditore non trovato.', true), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
         return ctx.scene.leave();
       }
       
       // Memorizza i dati nella sessione
       ctx.wizard.state.announcement = announcement;
       ctx.wizard.state.seller = seller;
+      ctx.session.buyWizardState.data.announcement = announcement;
+      ctx.session.buyWizardState.data.seller = seller;
       
-      // Creare una versione semplificata dell'annuncio per evitare problemi di formattazione
-      const announcementText = `
-*Hai selezionato il seguente annuncio:*
-
-ID: ${sanitizeMarkdown(announcementId)}
-Venditore: @${sanitizeMarkdown(seller.username || seller.firstName)}
-Prezzo: ${sanitizeMarkdown(announcement.price)}
-Corrente: ${announcement.connectorType === 'both' ? 'AC e DC' : announcement.connectorType}
-Reti attivabili: ${sanitizeMarkdown(announcement.brand)}
-Zone: ${sanitizeMarkdown(announcement.location)}
-${announcement.nonActivatableBrands ? `Reti non attivabili: ${sanitizeMarkdown(announcement.nonActivatableBrands)}\n` : ''}
-`;
+      // Formatta l'annuncio da mostrare
+      const announcementText = formatSellAnnouncement(announcement, seller);
       
-      await ctx.reply(announcementText, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Accetto le condizioni', callback_data: 'accept_conditions' },
-              { text: '❌ Annulla', callback_data: 'cancel_buy' }
+      // Invia il messaggio con l'annuncio e i bottoni per accettare o annullare
+      await ctx.reply(
+        showProgress(1, "Procedura di Acquisto kWh") + 
+        "Hai selezionato questo annuncio:\n\n" + announcementText +
+        "\n\nPer procedere con l'acquisto, accetta le condizioni.",
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Accetto le condizioni', callback_data: 'accept_conditions' },
+                { text: '❌ Annulla', callback_data: 'cancel_buy' }
+              ]
             ]
-          ]
+          }
         }
-      });
+      );
       
       return ctx.wizard.next();
     } catch (err) {
-      logger.error('Errore nel caricamento dell\'annuncio:', err);
-      await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+      logger.error(`Errore nel caricamento dell'annuncio per utente ${ctx.from.id}:`, err);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
       return ctx.scene.leave();
     }
   },
-  // Passo 2: Data di ricarica (gestito dalle callback)
+  
+  // Passo 2: Data di ricarica
   async (ctx) => {
-    // Gestito dalle callback
+    // Questo passaggio è principalmente gestito dalle callback
+    try {
+      // Controllo se è un comando di annullamento
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
+        await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
+        return ctx.scene.leave();
+      }
+      
+      // Se riceviamo un messaggio ma non una callback, probabilmente è la risposta alla data
+      if (ctx.message && ctx.message.text) {
+        ctx.session.buyWizardState.data.date = ctx.message.text;
+        ctx.session.buyWizardState.step = 2;
+        
+        // Verifica che la data sia valida (formato DD/MM/YYYY)
+        const dateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+        if (!dateRegex.test(ctx.session.buyWizardState.data.date)) {
+          await ctx.reply(uiElements.formatErrorMessage('Formato data non valido. Inserisci la data nel formato DD/MM/YYYY.', false), {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(false, false, 'wizard_back', 'wizard_skip', 'cancel_buy').reply_markup
+          });
+          return;
+        }
+        
+        // Passa al prossimo step
+        await ctx.reply(
+          showProgress(3, "Procedura di Acquisto kWh") + 
+          "A che ora vorresti ricaricare?\n\n" +
+          "Inserisci l'ora nel formato HH:MM (es. 14:30):",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_time', 'wizard_skip', 'cancel_buy').reply_markup
+          }
+        );
+        
+        return ctx.wizard.next();
+      }
+    } catch (err) {
+      logger.error(`Errore nel processare la data per utente ${ctx.from.id}:`, err);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      return ctx.scene.leave();
+    }
   },
+  
   // Passo 3: Ora di ricarica
   async (ctx) => {
     try {
       // Controllo se è un comando di annullamento
       if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
         logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-        await ctx.reply('❌ Procedura di acquisto annullata.');
+        await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
         return ctx.scene.leave();
       }
       
-      ctx.wizard.state.date = ctx.message.text;
-      
-      // Verifica che la data sia valida (formato DD/MM/YYYY)
-      const dateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
-      if (!dateRegex.test(ctx.wizard.state.date)) {
-        await ctx.reply('❌ Formato data non valido. Inserisci la data nel formato DD/MM/YYYY.', {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-            ]
+      // Se è una callback di navigazione indietro
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'wizard_back_time') {
+        await ctx.answerCbQuery();
+        
+        // Torna allo step precedente
+        await ctx.reply(
+          showProgress(2, "Procedura di Acquisto kWh") + 
+          "In quale data vorresti ricaricare?\n\n" +
+          "Inserisci la data nel formato DD/MM/YYYY (es. 15/05/2023):",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back', 'wizard_skip', 'cancel_buy').reply_markup
           }
-        });
-        return;
+        );
+        
+        return ctx.wizard.back();
       }
       
-      await ctx.reply('🕒 *A che ora vorresti ricaricare?*\n\n_Inserisci l\'ora nel formato HH:MM, ad esempio 14:30_', {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-          ]
+      // Se riceviamo un messaggio di testo, è l'ora
+      if (ctx.message && ctx.message.text) {
+        ctx.session.buyWizardState.data.time = ctx.message.text;
+        ctx.session.buyWizardState.step = 3;
+        
+        // Verifica che l'ora sia valida (formato HH:MM)
+        const timeRegex = /^(\d{1,2}):(\d{2})$/;
+        if (!timeRegex.test(ctx.session.buyWizardState.data.time)) {
+          await ctx.reply(uiElements.formatErrorMessage('Formato ora non valido. Inserisci l\'ora nel formato HH:MM.', false), {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_time', 'wizard_skip', 'cancel_buy').reply_markup
+          });
+          return;
         }
-      });
-      return ctx.wizard.next();
+        
+        // Passa al prossimo step
+        await ctx.reply(
+          showProgress(4, "Procedura di Acquisto kWh") + 
+          "Quale brand di colonnina utilizzerai?\n\n" +
+          "Inserisci il brand (es. Enel X, A2A, Be Charge...):",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_brand', 'wizard_skip', 'cancel_buy').reply_markup
+          }
+        );
+        
+        return ctx.wizard.next();
+      }
     } catch (err) {
-      logger.error('Errore nel processare la data:', err);
-      await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+      logger.error(`Errore nel processare l'ora per utente ${ctx.from.id}:`, err);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
       return ctx.scene.leave();
     }
   },
+  
   // Passo 4: Brand colonnina
   async (ctx) => {
     try {
       // Controllo se è un comando di annullamento
       if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
         logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-        await ctx.reply('❌ Procedura di acquisto annullata.');
+        await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
         return ctx.scene.leave();
       }
       
-      ctx.wizard.state.time = ctx.message.text;
-      
-      // Verifica che l'ora sia valida (formato HH:MM)
-      const timeRegex = /^(\d{1,2}):(\d{2})$/;
-      if (!timeRegex.test(ctx.wizard.state.time)) {
-        await ctx.reply('❌ Formato ora non valido. Inserisci l\'ora nel formato HH:MM.', {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-            ]
+      // Se è una callback di navigazione indietro
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'wizard_back_brand') {
+        await ctx.answerCbQuery();
+        
+        // Torna allo step precedente
+        await ctx.reply(
+          showProgress(3, "Procedura di Acquisto kWh") + 
+          "A che ora vorresti ricaricare?\n\n" +
+          "Inserisci l'ora nel formato HH:MM (es. 14:30):",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_time', 'wizard_skip', 'cancel_buy').reply_markup
           }
+        );
+        
+        return ctx.wizard.back();
+      }
+      
+      // Se riceviamo un messaggio di testo, è il brand
+      if (ctx.message && ctx.message.text) {
+        ctx.session.buyWizardState.data.brand = ctx.message.text;
+        ctx.session.buyWizardState.step = 4;
+        
+        // Passa al prossimo step
+        await ctx.reply(
+          showProgress(5, "Procedura di Acquisto kWh") + 
+          "Inserisci le coordinate GPS della colonnina\n\n" +
+          "Nel formato numerico, ad esempio 41.87290, 12.47326:",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_coordinates', 'wizard_skip', 'cancel_buy').reply_markup
+          }
+        );
+        
+        return ctx.wizard.next();
+      }
+    } catch (err) {
+      logger.error(`Errore nel processare il brand per utente ${ctx.from.id}:`, err);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      return ctx.scene.leave();
+    }
+  },
+  
+  // Passo 5: Coordinate GPS
+  async (ctx) => {
+    try {
+      // Controllo se è un comando di annullamento
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
+        await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
         });
+        return ctx.scene.leave();
+      }
+      
+      // Se è una callback di navigazione indietro
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'wizard_back_coordinates') {
+        await ctx.answerCbQuery();
+        
+        // Torna allo step precedente
+        await ctx.reply(
+          showProgress(4, "Procedura di Acquisto kWh") + 
+          "Quale brand di colonnina utilizzerai?\n\n" +
+          "Inserisci il brand (es. Enel X, A2A, Be Charge...):",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_brand', 'wizard_skip', 'cancel_buy').reply_markup
+          }
+        );
+        
+        return ctx.wizard.back();
+      }
+      
+      // Se riceviamo un messaggio di testo, sono le coordinate
+      if (ctx.message && ctx.message.text) {
+        ctx.session.buyWizardState.data.coordinates = ctx.message.text;
+        ctx.session.buyWizardState.step = 5;
+        
+        // Passa al prossimo step
+        await ctx.reply(
+          showProgress(6, "Procedura di Acquisto kWh") + 
+          "Vuoi aggiungere altre informazioni per il venditore?\n\n" +
+          "Scrivi il tuo messaggio o 'nessuna' se non ce ne sono:",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, true, 'wizard_back_info', 'wizard_skip_info', 'cancel_buy').reply_markup
+          }
+        );
+        
+        return ctx.wizard.next();
+      }
+    } catch (err) {
+      logger.error(`Errore nel processare le coordinate per utente ${ctx.from.id}:`, err);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      return ctx.scene.leave();
+    }
+  },
+  
+  // Passo 6: Informazioni aggiuntive e conferma
+  async (ctx) => {
+    try {
+      // Controllo se è un comando di annullamento
+      if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
+        logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
+        await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        });
+        return ctx.scene.leave();
+      }
+      
+      // Se è una callback di navigazione indietro
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'wizard_back_info') {
+        await ctx.answerCbQuery();
+        
+        // Torna allo step precedente
+        await ctx.reply(
+          showProgress(5, "Procedura di Acquisto kWh") + 
+          "Inserisci le coordinate GPS della colonnina\n\n" +
+          "Nel formato numerico, ad esempio 41.87290, 12.47326:",
+          {
+            parse_mode: 'HTML',
+            ...uiElements.wizardNavigationButtons(true, false, 'wizard_back_coordinates', 'wizard_skip', 'cancel_buy').reply_markup
+          }
+        );
+        
+        return ctx.wizard.back();
+      }
+      
+      // Se è una callback di skip
+      if (ctx.callbackQuery && ctx.callbackQuery.data === 'wizard_skip_info') {
+        await ctx.answerCbQuery();
+        ctx.session.buyWizardState.data.additionalInfo = '';
+        
+        // Mostra anteprima e chiede conferma
+        showConfirmation(ctx);
         return;
       }
       
-      await ctx.reply('🏭 *Quale brand di colonnina utilizzerai?*\n\n_Ad esempio: Enel X, A2A, Be Charge..._', {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-          ]
-        }
-      });
-      return ctx.wizard.next();
-    } catch (err) {
-      logger.error('Errore nel processare l\'ora:', err);
-      await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
-      return ctx.scene.leave();
-    }
-  },
-  // Passo 5: Coordinate GPS
-  async (ctx) => {
-    // Controllo se è un comando di annullamento
-    if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
-      logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-      await ctx.reply('❌ Procedura di acquisto annullata.');
-      return ctx.scene.leave();
-    }
-    
-    ctx.wizard.state.brand = ctx.message.text;
-    await ctx.reply('📍 *Inserisci le coordinate GPS della colonnina*\n\n_Nel formato numerico, ad esempio 41.87290, 12.47326_', {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-        ]
+      // Se riceviamo un messaggio di testo, sono le info aggiuntive
+      if (ctx.message && ctx.message.text) {
+        ctx.session.buyWizardState.data.additionalInfo = ctx.message.text === 'nessuna' ? '' : ctx.message.text;
+        ctx.session.buyWizardState.step = 6;
+        
+        // Mostra anteprima e chiede conferma
+        showConfirmation(ctx);
       }
-    });
-    return ctx.wizard.next();
-  },
-  // Passo 6: Informazioni aggiuntive
-  async (ctx) => {
-    // Controllo se è un comando di annullamento
-    if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
-      logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-      await ctx.reply('❌ Procedura di acquisto annullata.');
-      return ctx.scene.leave();
-    }
-    
-    ctx.wizard.state.coordinates = ctx.message.text;
-    await ctx.reply('ℹ️ *Vuoi aggiungere altre informazioni per il venditore?*\n\n_Scrivi "nessuna" se non ce ne sono_', {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-        ]
-      }
-    });
-    return ctx.wizard.next();
-  },
-  // Passo 7: Mostra l'anteprima e chiede conferma
-  async (ctx) => {
-    // Controllo se è un comando di annullamento
-    if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
-      logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-      await ctx.reply('❌ Procedura di acquisto annullata.');
-      return ctx.scene.leave();
-    }
-    
-    ctx.wizard.state.additionalInfo = ctx.message.text === 'nessuna' ? '' : ctx.message.text;
-    
-    try {
-      const buyer = await userService.registerUser(ctx.from);
-      
-      // Sanitizza tutti i dati inseriti dall'utente
-      const sanitizedDate = sanitizeMarkdown(ctx.wizard.state.date);
-      const sanitizedTime = sanitizeMarkdown(ctx.wizard.state.time);
-      const sanitizedBrand = sanitizeMarkdown(ctx.wizard.state.brand);
-      const sanitizedCoordinates = sanitizeMarkdown(ctx.wizard.state.coordinates);
-      const sanitizedAdditionalInfo = ctx.wizard.state.additionalInfo ? sanitizeMarkdown(ctx.wizard.state.additionalInfo) : '';
-      const sanitizedPrice = sanitizeMarkdown(ctx.wizard.state.announcement.price);
-      const sanitizedVendorName = ctx.wizard.state.seller.username ? 
-        '@' + sanitizeMarkdown(ctx.wizard.state.seller.username) : 
-        sanitizeMarkdown(ctx.wizard.state.seller.firstName);
-      
-      // Prepara l'anteprima dell'offerta con formattazione migliorata
-      const previewText = `
-🔋 *Richiesta di ricarica* 🔋
-
-📅 *Data:* ${sanitizedDate}
-🕙 *Ora:* ${sanitizedTime}
-🏭 *Colonnina:* ${sanitizedBrand}
-📍 *Posizione:* ${sanitizedCoordinates}
-${sanitizedAdditionalInfo ? `ℹ️ *Info aggiuntive:* ${sanitizedAdditionalInfo}\n` : ''}
-
-💰 *Prezzo venditore:* ${sanitizedPrice}
-👤 *Venditore:* ${sanitizedVendorName}
-`;
-      
-      await ctx.reply(`*Anteprima della tua richiesta:*\n\n${previewText}`, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Conferma e invia', callback_data: 'send_request' },
-              { text: '❌ Annulla', callback_data: 'cancel_buy' }
-            ]
-          ]
-        }
-      });
-      
-      return ctx.wizard.next();
     } catch (err) {
-      logger.error('Errore nella creazione dell\'anteprima:', err);
-      await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
+      logger.error(`Errore nella finalizzazione della richiesta per utente ${ctx.from.id}:`, err);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
       return ctx.scene.leave();
     }
-  },
-  // Passo 8: Gestito dalle callback
-  async (ctx) => {
-    // Controllo se è un comando di annullamento
-    if (ctx.message && ctx.message.text && ctx.message.text === '/annulla') {
-      logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-      await ctx.reply('❌ Procedura di acquisto annullata.');
-      return ctx.scene.leave();
-    }
-    
-    // Questo passaggio è gestito dalle callback
-    await ctx.reply('Usa i pulsanti per confermare o annullare la richiesta.');
   }
 );
 
-// Gestori delle callback per il wizard di acquisto
-buyKwhScene.action('accept_conditions', async (ctx) => {
-  await ctx.answerCbQuery('Condizioni accettate');
-  await ctx.reply('📅 *In quale data vorresti ricaricare?*\n\n_Inserisci la data nel formato DD/MM/YYYY, ad esempio 15/05/2023_', {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '❌ Annulla', callback_data: 'cancel_buy' }]
-      ]
+/**
+ * Mostra la conferma finale con i dati inseriti
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const showConfirmation = async (ctx) => {
+  try {
+    const data = ctx.session.buyWizardState.data;
+    const seller = data.seller;
+    
+    // Formatta le informazioni di riepilogo
+    const items = [
+      { label: 'Data', value: data.date },
+      { label: 'Ora', value: data.time },
+      { label: 'Brand colonnina', value: data.brand },
+      { label: 'Coordinate', value: data.coordinates }
+    ];
+    
+    if (data.additionalInfo) {
+      items.push({ label: 'Informazioni aggiuntive', value: data.additionalInfo });
     }
-  });
-  ctx.wizard.next();
+    
+    items.push({ label: 'Venditore', value: seller.username ? '@' + seller.username : seller.firstName });
+    
+    // Mostra il riepilogo
+    await ctx.reply(
+      showProgress(6, "Procedura di Acquisto kWh") + 
+      uiElements.formatConfirmationMessage('Riepilogo della richiesta', items),
+      { 
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              Markup.button.callback('✅ Conferma e invia', 'send_request'),
+              Markup.button.callback('❌ Annulla', 'cancel_buy')
+            ]
+          ]
+        }
+      }
+    );
+  } catch (err) {
+    logger.error(`Errore nella generazione del riepilogo per utente ${ctx.from.id}:`, err);
+    await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore nel generare il riepilogo. Per favore, riprova più tardi.', true), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+  }
+};
+
+// Gestori delle callback per il wizard di acquisto
+buyKwhWizard.action('accept_conditions', async (ctx) => {
+  try {
+    await ctx.answerCbQuery('Condizioni accettate');
+    
+    // Aggiorna lo stato della sessione
+    ctx.session.buyWizardState.step = 2;
+    
+    // Mostra il secondo step
+    await ctx.reply(
+      showProgress(2, "Procedura di Acquisto kWh") + 
+      "In quale data vorresti ricaricare?\n\n" +
+      "Inserisci la data nel formato DD/MM/YYYY (es. 15/05/2023):" +
+      "\n\n" + uiElements.formatTimeoutWarning(30),
+      {
+        parse_mode: 'HTML',
+        ...uiElements.wizardNavigationButtons(false, false, 'wizard_back', 'wizard_skip', 'cancel_buy').reply_markup
+      }
+    );
+    
+    ctx.wizard.next();
+  } catch (err) {
+    logger.error(`Errore nella callback accept_conditions per utente ${ctx.from.id}:`, err);
+    await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    return ctx.scene.leave();
+  }
 });
 
-buyKwhScene.action('cancel_buy', async (ctx) => {
-  await ctx.answerCbQuery('Procedura annullata');
-  await ctx.reply('❌ Procedura di acquisto annullata.');
-  return ctx.scene.leave();
+buyKwhWizard.action('cancel_buy', async (ctx) => {
+  try {
+    await ctx.answerCbQuery('Procedura annullata');
+    await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    return ctx.scene.leave();
+  } catch (err) {
+    logger.error(`Errore nella callback cancel_buy per utente ${ctx.from.id}:`, err);
+    return ctx.scene.leave();
+  }
 });
 
-buyKwhScene.action('send_request', async (ctx) => {
+buyKwhWizard.action('wizard_skip_info', async (ctx) => {
+  try {
+    await ctx.answerCbQuery('Informazioni aggiuntive saltate');
+    
+    ctx.session.buyWizardState.data.additionalInfo = '';
+    
+    // Mostra anteprima e chiede conferma
+    showConfirmation(ctx);
+  } catch (err) {
+    logger.error(`Errore nella callback wizard_skip_info per utente ${ctx.from.id}:`, err);
+    await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore. Per favore, riprova più tardi.', true), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    return ctx.scene.leave();
+  }
+});
+
+buyKwhWizard.action('send_request', async (ctx) => {
   try {
     await ctx.answerCbQuery('Invio richiesta in corso...');
     
     const buyer = await userService.registerUser(ctx.from);
+    const data = ctx.session.buyWizardState.data;
     
     // Prepara i dati dell'offerta
     const offerData = {
       buyerId: buyer.userId,
-      sellerId: ctx.wizard.state.seller.userId,
-      date: ctx.wizard.state.date,
-      time: ctx.wizard.state.time,
-      brand: ctx.wizard.state.brand,
-      coordinates: ctx.wizard.state.coordinates,
-      additionalInfo: ctx.wizard.state.additionalInfo
+      sellerId: data.seller.userId,
+      announcementId: data.announcementId,
+      date: data.date,
+      time: data.time,
+      brand: data.brand,
+      coordinates: data.coordinates,
+      additionalInfo: data.additionalInfo || ''
     };
     
     // Crea la nuova offerta
-    const newOffer = await offerService.createOffer(offerData, ctx.wizard.state.announcement._id);
+    const newOffer = await offerService.createOffer(offerData, data.announcementId);
     
     // Notifica il venditore
-    await offerService.notifySellerAboutOffer(newOffer, buyer, ctx.wizard.state.announcement);
+    await offerService.notifySellerAboutOffer(newOffer, buyer, data.announcement);
     
-    await ctx.reply('✅ *La tua richiesta è stata inviata al venditore!*\n\nRiceverai una notifica quando risponderà.', {
-      parse_mode: 'Markdown'
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Richiesta Inviata',
+      'La tua richiesta è stata inviata al venditore! Riceverai una notifica quando risponderà.\n\nPuoi vedere lo stato della tua richiesta usando /le_mie_ricariche.'
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
     });
     
     return ctx.scene.leave();
   } catch (err) {
-    logger.error('Errore nell\'invio della richiesta:', err);
-    await ctx.reply('❌ Si è verificato un errore durante l\'invio della richiesta. Per favore, riprova più tardi.');
+    logger.error(`Errore nell'invio della richiesta per utente ${ctx.from.id}:`, err);
+    await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore durante l\'invio della richiesta. Per favore, riprova più tardi.', true), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
     return ctx.scene.leave();
   }
 });
 
 // Comando per annullamento all'interno della scena
-buyKwhScene.command('annulla', async (ctx) => {
+buyKwhWizard.command('annulla', async (ctx) => {
   logger.info(`Comando /annulla ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-  await ctx.reply('❌ Procedura di acquisto annullata.');
+  await ctx.reply(uiElements.formatErrorMessage('Procedura di acquisto annullata.', false), {
+    parse_mode: 'HTML',
+    ...uiElements.mainMenuButton().reply_markup
+  });
   return ctx.scene.leave();
 });
 
 // Comando di aiuto all'interno della scena
-buyKwhScene.command('help', async (ctx) => {
+buyKwhWizard.command('help', async (ctx) => {
   logger.info(`Comando /help ricevuto da ${ctx.from.id} nel wizard di acquisto`);
-  await ctx.reply(`
-📚 *Guida all'acquisto di kWh*
+  await ctx.reply(uiElements.formatSuccessMessage(
+    'Guida all\'acquisto di kWh',
+    `Stai acquistando kWh da un venditore. I passaggi sono:
 
-Stai acquistando kWh da un venditore. I passaggi sono:
+1️⃣ Conferma dell'annuncio: accetta le condizioni dell'annuncio
+2️⃣ Data: inserisci quando vuoi ricaricare (DD/MM/YYYY)
+3️⃣ Ora: inserisci a che ora vuoi ricaricare (HH:MM)
+4️⃣ Brand: indica quale brand di colonnina userai
+5️⃣ Posizione: inserisci le coordinate GPS della colonnina
+6️⃣ Info aggiuntive: aggiungi altre informazioni per il venditore
 
-1️⃣ *Conferma dell'annuncio:* accetta le condizioni dell'annuncio
-2️⃣ *Data:* inserisci quando vuoi ricaricare (DD/MM/YYYY)
-3️⃣ *Ora:* inserisci a che ora vuoi ricaricare (HH:MM)
-4️⃣ *Colonnina:* indica quale brand di colonnina userai
-5️⃣ *Posizione:* inserisci le coordinate GPS della colonnina
-6️⃣ *Info aggiuntive:* aggiungi altre informazioni per il venditore
-7️⃣ *Conferma:* verifica i dati e conferma la richiesta
-
-Per annullare in qualsiasi momento, usa il comando /annulla o premi il pulsante "❌ Annulla".
-`, {
-    parse_mode: 'Markdown'
+Per annullare in qualsiasi momento, usa il comando /annulla o premi il pulsante "❌ Annulla".`
+  ), {
+    parse_mode: 'HTML'
   });
 });
 
-module.exports = buyKwhScene;
+module.exports = buyKwhWizard;
