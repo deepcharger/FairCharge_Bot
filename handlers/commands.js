@@ -14,6 +14,9 @@ const moment = require('moment');
 const logger = require('../utils/logger');
 const { isAdmin, ADMIN_USER_ID } = require('../config/admin');
 const { bot } = require('../config/bot');
+const { createInlineMenus } = require('../utils/commandLoader');
+const { offerButtons, mainMenuButton } = require('../utils/inlineButtons');
+const uiElements = require('../utils/uiElements');
 
 /**
  * Gestisce il comando /start
@@ -26,14 +29,41 @@ const startCommand = async (ctx) => {
       username: ctx.from.username
     });
     
-    await userService.registerUser(ctx.from);
+    const user = await userService.registerUser(ctx.from);
     
-    // Utilizzo formatWelcomeMessage dall'utility formatters
+    // Controllo se è presente un parametro start (deep linking)
+    let startParam = '';
+    if (ctx.message && ctx.message.text) {
+      const parts = ctx.message.text.split(' ');
+      if (parts.length > 1) {
+        startParam = parts[1];
+      }
+    }
+    
+    // Se è un deep link per un acquisto
+    if (startParam && startParam.startsWith('buy_')) {
+      const announcementId = startParam.substring(4);
+      
+      // Memorizza l'ID dell'annuncio nella sessione
+      ctx.session.announcementId = announcementId;
+      
+      await ctx.reply('🔋 *Benvenuto in FairCharge Pro!*\n\nHai aperto un link di acquisto kWh. Procediamo con la procedura di acquisto.', {
+        parse_mode: 'Markdown'
+      });
+      
+      // Avvia la procedura di acquisto
+      return ctx.scene.enter('BUY_KWH_WIZARD');
+    }
+    
+    // Messaggio di benvenuto per avvio normale
     const welcomeMessage = formatWelcomeMessage();
     
     await ctx.reply(welcomeMessage, {
       parse_mode: 'HTML'
     });
+    
+    // Mostra il menu principale con bottoni inline
+    await createInlineMenus(ctx.from.id, isAdmin(ctx.from.id));
     
     logger.debug(`Messaggio di benvenuto inviato a ${ctx.from.id}`);
   } catch (err) {
@@ -73,7 +103,9 @@ const myChargesCommand = async (ctx) => {
     
     if (Object.values(offers).flat().length === 0) {
       logger.debug(`Nessuna ricarica attiva per utente ${ctx.from.id}`);
-      await ctx.reply('Non hai ricariche attive al momento.');
+      await ctx.reply('Non hai ricariche attive al momento.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -102,180 +134,19 @@ const myChargesCommand = async (ctx) => {
           userId: user.userId
         });
         
-        // Invia i bottoni per questa offerta usando direttamente ctx.telegram.sendMessage
-        // che è più affidabile per i bottoni rispetto a ctx.reply con Markup
-        if (offer.status === 'accepted' && isbuyer) {
-          // Bottoni per le offerte accettate (acquirente)
-          logger.debug(`Inviando bottoni per offerta accettata ${offer._id} (acquirente)`);
-          
+        // Invia il messaggio con i bottoni per questa offerta
+        const message = `Opzioni per ricarica #${i + 1}:`;
+        
+        // Ottieni i bottoni appropriati in base allo stato e al ruolo
+        const buttons = offerButtons(offer._id, offer.status, isbuyer);
+        
+        // Invia solo se ci sono bottoni da mostrare
+        if (buttons.reply_markup.inline_keyboard.length > 0) {
           await ctx.telegram.sendMessage(
             ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '🔋 Sono pronto per caricare', callback_data: `ready_to_charge_${offer._id}` },
-                    { text: '❌ Annulla', callback_data: `cancel_charge_${offer._id}` }
-                  ]
-                ]
-              }
-            }
+            message,
+            buttons
           );
-        } 
-        else if (offer.status === 'ready_to_charge' && !isbuyer) {
-          // Bottoni per le offerte pronte (venditore)
-          logger.debug(`Inviando bottoni per offerta ready_to_charge ${offer._id} (venditore)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '▶️ Ho avviato la ricarica', callback_data: `charging_started_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        } 
-        else if (offer.status === 'charging_started' && isbuyer) {
-          // Bottoni per la ricarica iniziata (acquirente)
-          logger.debug(`Inviando bottoni per offerta charging_started ${offer._id} (acquirente)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '✅ Ricarica partita', callback_data: `charging_ok_${offer._id}` },
-                    { text: '❌ Problemi', callback_data: `charging_issues_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        } 
-        else if (offer.status === 'charging' && isbuyer) {
-          // Bottoni per la ricarica in corso (acquirente)
-          logger.debug(`Inviando bottoni per offerta charging ${offer._id} (acquirente)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '🔋 Ho terminato la ricarica', callback_data: `charging_completed_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        } 
-        else if (offer.status === 'kwh_confirmed' && !isbuyer) {
-          // Bottoni per i kWh confermati (venditore)
-          logger.debug(`Inviando bottoni per offerta kwh_confirmed ${offer._id} (venditore)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '💶 Inserisci importo da pagare', callback_data: `set_payment_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        } 
-        else if (offer.status === 'payment_pending' && isbuyer) {
-          // Bottoni per il pagamento in attesa (acquirente)
-          logger.debug(`Inviando bottoni per offerta payment_pending ${offer._id} (acquirente)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '💸 Ho effettuato il pagamento', callback_data: `payment_sent_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        } 
-        else if (offer.status === 'payment_sent' && !isbuyer) {
-          // Bottoni per il pagamento inviato (venditore)
-          logger.debug(`Inviando bottoni per offerta payment_sent ${offer._id} (venditore)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '✅ Confermo pagamento ricevuto', callback_data: `payment_confirmed_${offer._id}` },
-                    { text: '❌ Non ho ricevuto', callback_data: `payment_not_received_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        } 
-        // CORREZIONE: Aggiunto handler per payment_pending per il venditore
-        else if (offer.status === 'payment_pending' && !isbuyer) {
-          // Bottoni per il pagamento in attesa (venditore)
-          logger.debug(`Inviando bottoni per offerta payment_pending ${offer._id} (venditore - in attesa di pagamento)`);
-          
-          await ctx.telegram.sendMessage(
-            ctx.chat.id,
-            `Opzioni per ricarica #${i + 1}:`,
-            {
-              reply_markup: {
-                inline_keyboard: [
-                  [
-                    { text: '💸 Verifica pagamento', callback_data: `verify_payment_${offer._id}` }
-                  ]
-                ]
-              }
-            }
-          );
-        }
-        else if (offer.status === 'completed') {
-          // Bottoni per il feedback (offerte completate)
-          const hasGivenFeedback = isbuyer ? 
-            offer.buyerFeedback && offer.buyerFeedback.rating !== undefined : 
-            offer.sellerFeedback && offer.sellerFeedback.rating !== undefined;
-          
-          if (!hasGivenFeedback) {
-            logger.debug(`Inviando bottoni per feedback offerta completed ${offer._id}`);
-            
-            await ctx.telegram.sendMessage(
-              ctx.chat.id,
-              `Opzioni per ricarica #${i + 1}:`,
-              {
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      { text: '👍 Positivo', callback_data: `feedback_positive_${offer._id}` },
-                      { text: '👎 Negativo', callback_data: `feedback_negative_${offer._id}` }
-                    ]
-                  ]
-                }
-              }
-            );
-          }
         }
       }
       
@@ -315,6 +186,9 @@ const myChargesCommand = async (ctx) => {
       await sendCategoryMessage('Annullate', offers.cancelled, '❌');
     }
     
+    // Aggiungi pulsante per tornare al menu principale
+    await ctx.reply('Seleziona una ricarica dalle liste qui sopra o torna al menu principale:', mainMenuButton().reply_markup);
+    
     logger.info(`Liste ricariche inviate a ${ctx.from.id}`);
   } catch (err) {
     logger.error(`Errore nel recupero delle ricariche per utente ${ctx.from.id}:`, err);
@@ -344,7 +218,10 @@ const profileCommand = async (ctx) => {
       userProfile.buyAnnouncement
     );
     
-    await ctx.reply(profileText, { parse_mode: 'HTML' });
+    await ctx.reply(profileText, { 
+      parse_mode: 'HTML',
+      ...mainMenuButton().reply_markup
+    });
     logger.debug(`Profilo inviato a ${ctx.from.id}`);
   } catch (err) {
     logger.error(`Errore nel recupero del profilo per utente ${ctx.from.id}:`, err);
@@ -369,7 +246,10 @@ const helpCommand = async (ctx) => {
     // Usa il messaggio di help appropriato
     const helpMessage = isAdminUser ? formatAdminHelpMessage() : formatWelcomeMessage();
     
-    await ctx.reply(helpMessage, { parse_mode: 'HTML' });
+    await ctx.reply(helpMessage, { 
+      parse_mode: 'HTML',
+      ...mainMenuButton().reply_markup
+    });
     logger.debug(`Messaggio di aiuto (${isAdminUser ? 'admin' : 'utente'}) inviato a ${ctx.from.id}`);
   } catch (err) {
     logger.error(`Errore nell'invio del messaggio di aiuto per utente ${ctx.from.id}:`, err);
@@ -478,45 +358,19 @@ const updateBotCommandsCommand = async (ctx) => {
       return;
     }
     
-    // Array dei comandi da impostare per utenti normali
-    const userCommands = [
-      { command: 'start', description: 'Avvia il bot' },
-      { command: 'help', description: 'Mostra i comandi disponibili' },
-      { command: 'vendi_kwh', description: 'Crea un annuncio per vendere kWh' },
-      { command: 'le_mie_ricariche', description: 'Visualizza le tue ricariche attive' },
-      { command: 'profilo', description: 'Visualizza il tuo profilo' },
-      { command: 'portafoglio', description: 'Visualizza il tuo portafoglio' },
-      { command: 'portafoglio_partner', description: 'Dettagli portafoglio con un partner' },
-      { command: 'archivia_annuncio', description: 'Archivia il tuo annuncio attivo' },
-      { command: 'annulla', description: 'Annulla la procedura in corso' }
-    ];
+    // Utilizza il modulo commandLoader per registrare i comandi
+    const { registerCommands } = require('../utils/commandLoader');
+    const success = await registerCommands();
     
-    // Array dei comandi per amministratori
-    const adminCommands = [
-      ...userCommands,
-      { command: 'avvio_ricarica', description: 'Avvia una ricarica usando il saldo (solo admin)' },
-      { command: 'le_mie_donazioni', description: 'Visualizza le donazioni ricevute (solo admin)' },
-      { command: 'portafoglio_venditore', description: 'Dettagli portafoglio con un venditore (solo admin)' },
-      { command: 'update_commands', description: 'Aggiorna i comandi del bot (solo admin)' },
-      { command: 'cancella_dati_utente', description: 'Cancella i dati di un utente (solo admin)' },
-      { command: 'aggiungi_feedback', description: 'Aggiungi feedback a un utente (solo admin)' },
-      { command: 'db_admin', description: 'Gestione database (solo admin)' },
-      // Aggiungi i nuovi comandi admin
-      { command: 'check_admin_config', description: 'Verifica configurazione admin (solo admin)' },
-      { command: 'create_admin_account', description: 'Crea account admin (solo admin)' },
-      { command: 'system_checkup', description: 'Controllo di sistema (solo admin)' }
-    ];
-    
-    // Imposta i comandi per gli utenti normali
-    await ctx.telegram.setMyCommands(userCommands);
-    
-    // Imposta i comandi per l'amministratore
-    await ctx.telegram.setMyCommands(adminCommands, {
-      scope: { type: 'chat', chat_id: ADMIN_USER_ID }
-    });
-    
-    logger.info(`Comandi del bot aggiornati da admin ${ctx.from.id}`);
-    await ctx.reply('✅ I comandi del bot sono stati aggiornati con successo!');
+    if (success) {
+      logger.info(`Comandi del bot aggiornati da admin ${ctx.from.id}`);
+      await ctx.reply('✅ I comandi del bot sono stati aggiornati con successo!', {
+        ...mainMenuButton().reply_markup
+      });
+    } else {
+      logger.warn(`Aggiornamento comandi fallito per ${ctx.from.id}`);
+      await ctx.reply('❌ Si è verificato un errore durante l\'aggiornamento dei comandi. Per favore, riprova più tardi.');
+    }
   } catch (err) {
     logger.error(`Errore nell'aggiornamento dei comandi per utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore durante l\'aggiornamento dei comandi. Per favore, riprova più tardi.');
@@ -543,9 +397,13 @@ const cancelCommand = async (ctx) => {
       // Pulisci la scena e lo stato
       await ctx.scene.leave();
       
-      await ctx.reply(`❌ Hai annullato la procedura di "${currentScene}".`);
+      await ctx.reply(`❌ Hai annullato la procedura di "${currentScene}".`, {
+        ...mainMenuButton().reply_markup
+      });
     } else {
-      await ctx.reply('ℹ️ Non hai nessuna procedura attiva da annullare.');
+      await ctx.reply('ℹ️ Non hai nessuna procedura attiva da annullare.', {
+        ...mainMenuButton().reply_markup
+      });
     }
   } catch (err) {
     logger.error(`Errore nel comando annulla per utente ${ctx.from.id}:`, err);
@@ -570,7 +428,9 @@ const archiveAnnouncementCommand = async (ctx) => {
     const activeAnnouncement = await announcementService.getActiveAnnouncement(user.userId, 'sell');
     
     if (!activeAnnouncement) {
-      await ctx.reply('❌ Non hai nessun annuncio attivo da archiviare.');
+      await ctx.reply('❌ Non hai nessun annuncio attivo da archiviare.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -584,14 +444,18 @@ const archiveAnnouncementCommand = async (ctx) => {
       // Aggiorna comunque il riferimento nell'utente per risolvere l'incoerenza
       await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
       
-      await ctx.reply(`⚠️ Non è stato possibile trovare l'annuncio nel database, ma il riferimento è stato rimosso dal tuo profilo.`);
+      await ctx.reply(`⚠️ Non è stato possibile trovare l'annuncio nel database, ma il riferimento è stato rimosso dal tuo profilo.`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Aggiorna il riferimento nell'utente
     await announcementService.updateUserActiveAnnouncement(user.userId, 'sell', null);
     
-    await ctx.reply(`✅ Il tuo annuncio (ID: ${activeAnnouncement._id}) è stato archiviato con successo.`);
+    await ctx.reply(`✅ Il tuo annuncio (ID: ${activeAnnouncement._id}) è stato archiviato con successo.`, {
+      ...mainMenuButton().reply_markup
+    });
     
   } catch (err) {
     logger.error(`Errore nell'archiviazione dell'annuncio per l'utente ${ctx.from.id}:`, err);
@@ -611,7 +475,6 @@ const walletCommand = async (ctx) => {
     });
     
     // Recupera il riepilogo del portafoglio
-    const walletService = require('../services/walletService');
     const walletSummary = await walletService.getUserWalletSummary(ctx.from.id);
     
     // Prepara il messaggio con le statistiche
@@ -681,7 +544,20 @@ const walletCommand = async (ctx) => {
       message += `\n<i>Non hai ancora interagito con altri utenti.</i>`;
     }
     
-    await ctx.reply(message, { parse_mode: 'HTML' });
+    // Aggiungi bottoni per azioni portafoglio
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '📊 Statistiche complete', callback_data: 'wallet_stats' },
+          { text: '📱 Menu principale', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+    
+    await ctx.reply(message, { 
+      parse_mode: 'HTML',
+      reply_markup: inlineKeyboard
+    });
     
   } catch (err) {
     logger.error(`Errore nel recupero del portafoglio per utente ${ctx.from.id}:`, err);
@@ -704,18 +580,21 @@ const partnerWalletCommand = async (ctx) => {
     // Estrai l'ID del partner
     const parts = ctx.message.text.split(' ');
     if (parts.length < 2) {
-      await ctx.reply('⚠️ Formato corretto: /portafoglio_partner ID_PARTNER\n\nPer vedere l\'elenco dei partner, usa /portafoglio');
+      await ctx.reply('⚠️ Formato corretto: /portafoglio_partner ID_PARTNER\n\nPer vedere l\'elenco dei partner, usa /portafoglio', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     const partnerId = parseInt(parts[1]);
     if (isNaN(partnerId)) {
-      await ctx.reply('❌ ID partner non valido. Deve essere un numero.');
+      await ctx.reply('❌ ID partner non valido. Deve essere un numero.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Recupera i dettagli del portafoglio con questo partner
-    const walletService = require('../services/walletService');
     const detail = await walletService.getPartnerWalletDetail(ctx.from.id, partnerId);
     
     // Recupera info sul partner
@@ -723,7 +602,9 @@ const partnerWalletCommand = async (ctx) => {
     const partner = await User.findOne({ userId: partnerId });
     
     if (!partner) {
-      await ctx.reply(`❌ Partner con ID ${partnerId} non trovato.`);
+      await ctx.reply(`❌ Partner con ID ${partnerId} non trovato.`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -790,10 +671,23 @@ const partnerWalletCommand = async (ctx) => {
       message += `<i>Usa /le_mie_ricariche per gestire le ricariche in corso</i>\n`;
     }
     
-    await ctx.reply(message, { parse_mode: 'HTML' });
+    // Aggiungi pulsanti azioni
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔄 Aggiorna', callback_data: `refresh_partner_${partnerId}` },
+          { text: '📱 Menu principale', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+    
+    await ctx.reply(message, { 
+      parse_mode: 'HTML',
+      reply_markup: inlineKeyboard
+    });
     
   } catch (err) {
-    logger.error(`Errore nel recupero dei dettagli del portafoglio per utente ${ctx.from.id} con partner ${partnerId}:`, err);
+    logger.error(`Errore nel recupero dei dettagli del portafoglio per utente ${ctx.from.id}:`, err);
     await ctx.reply('❌ Si è verificato un errore. Per favore, riprova più tardi.');
   }
 };
@@ -811,16 +705,19 @@ const myDonationsCommand = async (ctx) => {
     
     // Verifica che sia l'admin
     if (!isAdmin(ctx.from.id)) {
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Recupera le statistiche delle donazioni
-    const walletService = require('../services/walletService');
     const stats = await walletService.getAdminDonationStats(ctx.from.id);
     
     if (stats.totalVendors === 0) {
-      await ctx.reply('Non hai ancora ricevuto donazioni.');
+      await ctx.reply('Non hai ancora ricevuto donazioni.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -857,7 +754,20 @@ const myDonationsCommand = async (ctx) => {
     // Aggiungi note finali
     message += `\n\nPer vedere dettagli specifici su un venditore, usa:\n/portafoglio_venditore ID_VENDITORE`;
     
-    await ctx.reply(message, { parse_mode: 'HTML' });
+    // Aggiungi pulsanti per azioni
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔄 Aggiorna', callback_data: 'refresh_donations' },
+          { text: '📱 Menu principale', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+    
+    await ctx.reply(message, { 
+      parse_mode: 'HTML',
+      reply_markup: inlineKeyboard
+    });
     
   } catch (err) {
     logger.error('Errore nel recupero delle donazioni:', err);
@@ -879,25 +789,30 @@ const vendorWalletCommand = async (ctx) => {
     
     // Verifica che sia l'admin
     if (!isAdmin(ctx.from.id)) {
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Estrai l'ID del venditore
     const parts = ctx.message.text.split(' ');
     if (parts.length < 2) {
-      await ctx.reply('⚠️ Formato corretto: /portafoglio_venditore ID_VENDITORE\n\nPer vedere l\'elenco dei venditori, usa /le_mie_donazioni');
+      await ctx.reply('⚠️ Formato corretto: /portafoglio_venditore ID_VENDITORE\n\nPer vedere l\'elenco dei venditori, usa /le_mie_donazioni', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     const vendorId = parseInt(parts[1]);
     if (isNaN(vendorId)) {
-      await ctx.reply('❌ ID venditore non valido. Deve essere un numero.');
+      await ctx.reply('❌ ID venditore non valido. Deve essere un numero.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Recupera i dettagli del portafoglio con questo venditore
-    const walletService = require('../services/walletService');
     const detail = await walletService.getPartnerWalletDetail(ctx.from.id, vendorId);
     
     // Recupera info sul venditore
@@ -905,7 +820,9 @@ const vendorWalletCommand = async (ctx) => {
     const vendor = await User.findOne({ userId: vendorId });
     
     if (!vendor) {
-      await ctx.reply(`❌ Venditore con ID ${vendorId} non trovato.`);
+      await ctx.reply(`❌ Venditore con ID ${vendorId} non trovato.`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -958,7 +875,20 @@ const vendorWalletCommand = async (ctx) => {
       message += `❌ Non hai kWh disponibili da questo venditore. Dovrai pagare l'intero importo per le prossime ricariche.`;
     }
     
-    await ctx.reply(message, { parse_mode: 'HTML' });
+    // Aggiungi pulsanti azioni
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔄 Aggiorna', callback_data: `refresh_vendor_${vendorId}` },
+          { text: '📱 Menu principale', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+    
+    await ctx.reply(message, { 
+      parse_mode: 'HTML',
+      reply_markup: inlineKeyboard
+    });
     
   } catch (err) {
     logger.error(`Errore nel recupero dei dettagli del portafoglio con venditore ${ctx.message?.text}:`, err);
@@ -980,14 +910,18 @@ const deleteUserDataCommand = async (ctx) => {
     // Verifica che sia l'admin
     if (!isAdmin(ctx.from.id)) {
       logger.warn(`Tentativo non autorizzato di usare /cancella_dati_utente da parte di ${ctx.from.id}`);
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Estrai il parametro username o userId
     const text = ctx.message.text.split(' ');
     if (text.length < 2) {
-      await ctx.reply('⚠️ Formato corretto: /cancella\\_dati\\_utente username o ID');
+      await ctx.reply('⚠️ Formato corretto: /cancella\\_dati\\_utente username o ID', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1004,7 +938,9 @@ const deleteUserDataCommand = async (ctx) => {
     }
     
     if (!user) {
-      await ctx.reply(`❌ Utente "${targetUser}" non trovato.`);
+      await ctx.reply(`❌ Utente "${targetUser}" non trovato.`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1037,14 +973,18 @@ const addFeedbackCommand = async (ctx) => {
     // Verifica che sia l'admin
     if (!isAdmin(ctx.from.id)) {
       logger.warn(`Tentativo non autorizzato di usare /aggiungi_feedback da parte di ${ctx.from.id}`);
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
     // Formato: /aggiungi_feedback @username o ID positivi:X negativi:Y
     const text = ctx.message.text.split(' ');
     if (text.length < 3) {
-      await ctx.reply(`⚠️ Formato corretto: /aggiungi\\_feedback username o ID positivi:X negativi:Y\n\nEsempio: /aggiungi\\_feedback @ciccio11218 positivi:5 negativi:1`);
+      await ctx.reply(`⚠️ Formato corretto: /aggiungi\\_feedback username o ID positivi:X negativi:Y\n\nEsempio: /aggiungi\\_feedback @ciccio11218 positivi:5 negativi:1`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1061,7 +1001,9 @@ const addFeedbackCommand = async (ctx) => {
     }
     
     if (!user) {
-      await ctx.reply(`❌ Utente "${targetUser}" non trovato.`);
+      await ctx.reply(`❌ Utente "${targetUser}" non trovato.`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1078,7 +1020,9 @@ const addFeedbackCommand = async (ctx) => {
     }
     
     if (isNaN(positivesToAdd) && isNaN(negativesToAdd)) {
-      await ctx.reply('❌ Specificare almeno un valore per positivi e/o negativi.');
+      await ctx.reply('❌ Specificare almeno un valore per positivi e/o negativi.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1106,7 +1050,9 @@ const addFeedbackCommand = async (ctx) => {
     const newPercentage = user.getPositivePercentage();
     
     // Invia conferma
-    await ctx.reply(`✅ Feedback aggiornato per utente ${user.username || user.firstName} (ID: ${user.userId}):\n\nFeedback positivi: ${oldPositive} → ${newPositive}\nFeedback totali: ${oldTotal} → ${newTotal}\nPercentuale positivi: ${oldPercentage !== null ? oldPercentage + '%' : 'N/A'} → ${newPercentage !== null ? newPercentage + '%' : 'N/A'}`);
+    await ctx.reply(`✅ Feedback aggiornato per utente ${user.username || user.firstName} (ID: ${user.userId}):\n\nFeedback positivi: ${oldPositive} → ${newPositive}\nFeedback totali: ${oldTotal} → ${newTotal}\nPercentuale positivi: ${oldPercentage !== null ? oldPercentage + '%' : 'N/A'} → ${newPercentage !== null ? newPercentage + '%' : 'N/A'}`, {
+      ...mainMenuButton().reply_markup
+    });
     
     // Notifica all'utente dell'aggiornamento dei feedback (opzionale)
     try {
@@ -1143,7 +1089,9 @@ const deleteUserDataHandler = async (ctx) => {
       const targetUser = await User.findOne({ userId: targetUserId });
       
       if (!targetUser) {
-        await ctx.reply('❌ Utente non trovato.');
+        await ctx.reply('❌ Utente non trovato.', {
+          ...mainMenuButton().reply_markup
+        });
         return true; // Impedisce che altri handler gestiscano questo messaggio
       }
       
@@ -1192,7 +1140,9 @@ const deleteUserDataHandler = async (ctx) => {
       // Non eliminiamo completamente l'utente per mantenere la storia delle transazioni,
       // ma rimuoviamo tutti i dati personali
       
-      await ctx.reply(`✅ I dati dell'utente ${targetUserId} sono stati cancellati con successo dal sistema.\n\nLe transazioni storiche sono state anonimizzate, ma rimangono nel sistema per scopi di audit.`);
+      await ctx.reply(`✅ I dati dell'utente ${targetUserId} sono stati cancellati con successo dal sistema.\n\nLe transazioni storiche sono state anonimizzate, ma rimangono nel sistema per scopi di audit.`, {
+        ...mainMenuButton().reply_markup
+      });
       
       // Prova a notificare l'utente
       try {
@@ -1205,7 +1155,9 @@ const deleteUserDataHandler = async (ctx) => {
       return true; // Impedisce che altri handler gestiscano questo messaggio
     } catch (err) {
       logger.error(`Errore nella cancellazione dei dati dell'utente ${targetUserId}:`, err);
-      await ctx.reply('❌ Si è verificato un errore durante la cancellazione dei dati. Per favore, contatta l\'amministratore.');
+      await ctx.reply('❌ Si è verificato un errore durante la cancellazione dei dati. Per favore, contatta l\'amministratore.', {
+        ...mainMenuButton().reply_markup
+      });
       return true; // Impedisce che altri handler gestiscano questo messaggio
     }
   }
@@ -1228,7 +1180,9 @@ const dbAdminCommand = async (ctx) => {
     // Verifica che l'utente sia l'admin
     if (!isAdmin(ctx.from.id)) {
       logger.warn(`Tentativo non autorizzato di usare /db_admin da parte di ${ctx.from.id}`);
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1247,7 +1201,9 @@ Operazioni disponibili:
 - check: Verifica la coerenza del database
 - fix_user <userId>: Ripulisce i riferimenti di un utente specifico
 - stats: Mostra statistiche del database
-      `);
+      `, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1275,7 +1231,9 @@ Operazioni disponibili:
         break;
       case 'fix_user':
         if (text.length < 3) {
-          await ctx.reply('⚠️ Specificare l\'ID utente: /db_admin fix_user <userId>');
+          await ctx.reply('⚠️ Specificare l\'ID utente: /db_admin fix_user <userId>', {
+            ...mainMenuButton().reply_markup
+          });
           return;
         }
         await fixUser(ctx, text[2]);
@@ -1284,11 +1242,15 @@ Operazioni disponibili:
         await showDatabaseStats(ctx);
         break;
       default:
-        await ctx.reply('❌ Operazione non riconosciuta. Usa /db_admin per vedere le operazioni disponibili.');
+        await ctx.reply('❌ Operazione non riconosciuta. Usa /db_admin per vedere le operazioni disponibili.', {
+          ...mainMenuButton().reply_markup
+        });
     }
   } catch (err) {
     logger.error(`Errore nel comando db_admin per utente ${ctx.from.id}:`, err);
-    await ctx.reply('❌ Si è verificato un errore durante l\'esecuzione del comando. Per favore, controlla i log per maggiori dettagli.');
+    await ctx.reply('❌ Si è verificato un errore durante l\'esecuzione del comando. Per favore, controlla i log per maggiori dettagli.', {
+      ...mainMenuButton().reply_markup
+    });
   }
 };
 
@@ -1325,7 +1287,9 @@ const resetAnnouncements = async (ctx) => {
     }
   });
   
-  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellati ${countBefore} annunci.\nRimossi i riferimenti dagli utenti.`);
+  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellati ${countBefore} annunci.\nRimossi i riferimenti dagli utenti.`, {
+    ...mainMenuButton().reply_markup
+  });
 };
 
 /**
@@ -1348,7 +1312,9 @@ const resetOffers = async (ctx) => {
     }
   });
   
-  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellate ${countBefore} offerte.\nRimossi i riferimenti dagli annunci.`);
+  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellate ${countBefore} offerte.\nRimossi i riferimenti dagli annunci.`, {
+    ...mainMenuButton().reply_markup
+  });
 };
 
 /**
@@ -1371,7 +1337,9 @@ const resetTransactions = async (ctx) => {
     }
   });
   
-  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellate ${countBefore} transazioni.\nRimossi i riferimenti dagli utenti.`);
+  await ctx.reply(`✅ Operazione completata con successo!\n\nCancellate ${countBefore} transazioni.\nRimossi i riferimenti dagli utenti.`, {
+    ...mainMenuButton().reply_markup
+  });
 };
 
 /**
@@ -1446,7 +1414,9 @@ const cleanupReferences = async (ctx) => {
     }
   }
   
-  await ctx.reply(`✅ Pulizia completata!\n\nRiferimenti corretti: ${fixedCount}\n- ${deletedAnnouncements} annunci eliminati\n- ${updatedOffers} offerte aggiornate\n- ${fixedCount - deletedAnnouncements - updatedOffers} riferimenti utenti corretti`);
+  await ctx.reply(`✅ Pulizia completata!\n\nRiferimenti corretti: ${fixedCount}\n- ${deletedAnnouncements} annunci eliminati\n- ${updatedOffers} offerte aggiornate\n- ${fixedCount - deletedAnnouncements - updatedOffers} riferimenti utenti corretti`, {
+    ...mainMenuButton().reply_markup
+  });
 };
 
 /**
@@ -1532,9 +1502,15 @@ const checkConsistency = async (ctx) => {
 `;
   
   if (issues === 0) {
-    await ctx.reply(`✅ Nessun problema di coerenza trovato!\n\n${stats}`, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ Nessun problema di coerenza trovato!\n\n${stats}`, { 
+      parse_mode: 'HTML',
+      ...mainMenuButton().reply_markup
+    });
   } else {
-    await ctx.reply(`⚠️ Trovati ${issues} problemi di coerenza:\n\n${report}\nPuoi risolvere questi problemi con /db_admin cleanup_refs\n\n${stats}`, { parse_mode: 'HTML' });
+    await ctx.reply(`⚠️ Trovati ${issues} problemi di coerenza:\n\n${report}\nPuoi risolvere questi problemi con /db_admin cleanup_refs\n\n${stats}`, { 
+      parse_mode: 'HTML',
+      ...mainMenuButton().reply_markup
+    });
   }
 };
 
@@ -1548,7 +1524,9 @@ const fixUser = async (ctx, userIdStr) => {
     const userId = parseInt(userIdStr);
     
     if (isNaN(userId)) {
-      await ctx.reply('❌ ID utente non valido. Deve essere un numero.');
+      await ctx.reply('❌ ID utente non valido. Deve essere un numero.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1556,7 +1534,9 @@ const fixUser = async (ctx, userIdStr) => {
     const user = await User.findOne({ userId: userId });
     
     if (!user) {
-      await ctx.reply(`❌ Utente con ID ${userId} non trovato.`);
+      await ctx.reply(`❌ Utente con ID ${userId} non trovato.`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1583,13 +1563,19 @@ const fixUser = async (ctx, userIdStr) => {
     
     if (updates.length > 0) {
       await user.save();
-      await ctx.reply(`✅ Utente corretto con successo!\n\nModifiche effettuate:\n${updates.join('\n')}`);
+      await ctx.reply(`✅ Utente corretto con successo!\n\nModifiche effettuate:\n${updates.join('\n')}`, {
+        ...mainMenuButton().reply_markup
+      });
     } else {
-      await ctx.reply('✅ Nessun problema trovato per questo utente.');
+      await ctx.reply('✅ Nessun problema trovato per questo utente.', {
+        ...mainMenuButton().reply_markup
+      });
     }
   } catch (err) {
     logger.error(`Errore nella correzione dell'utente:`, err);
-    await ctx.reply('❌ Si è verificato un errore durante la correzione dell\'utente.');
+    await ctx.reply('❌ Si è verificato un errore durante la correzione dell\'utente.', {
+      ...mainMenuButton().reply_markup
+    });
   }
 };
 
@@ -1643,7 +1629,10 @@ const showDatabaseStats = async (ctx) => {
 - Completate: ${completedOfferCount}
 - Annullate: ${cancelledOfferCount}
 - Contestate: ${disputedOfferCount}
-`, { parse_mode: 'HTML' });
+`, { 
+    parse_mode: 'HTML',
+    ...mainMenuButton().reply_markup
+  });
 };
 
 /**
@@ -1664,7 +1653,9 @@ const dbResetConfirmationHandler = async (ctx) => {
       // Verifica che sia l'admin
       if (!isAdmin(ctx.from.id)) {
         logger.warn(`Tentativo non autorizzato di confermare reset database da parte di ${ctx.from.id}`);
-        await ctx.reply('❌ Solo l\'amministratore può eseguire questa operazione.');
+        await ctx.reply('❌ Solo l\'amministratore può eseguire questa operazione.', {
+          ...mainMenuButton().reply_markup
+        });
         return true;
       }
       
@@ -1687,12 +1678,16 @@ const dbResetConfirmationHandler = async (ctx) => {
         }
       });
       
-      await ctx.reply('✅ Reset del database completato con successo!\n\nTutti i dati sono stati cancellati tranne i profili utente, che sono stati reimpostati (saldo, feedback e annunci attivi azzerati).');
+      await ctx.reply('✅ Reset del database completato con successo!\n\nTutti i dati sono stati cancellati tranne i profili utente, che sono stati reimpostati (saldo, feedback e annunci attivi azzerati).', {
+        ...mainMenuButton().reply_markup
+      });
       
       return true; // Impedisce che altri handler gestiscano questo messaggio
     } catch (err) {
       logger.error(`Errore nel reset del database:`, err);
-      await ctx.reply('❌ Si è verificato un errore durante il reset del database. Per favore, controlla i log per maggiori dettagli.');
+      await ctx.reply('❌ Si è verificato un errore durante il reset del database. Per favore, controlla i log per maggiori dettagli.', {
+        ...mainMenuButton().reply_markup
+      });
       return true; // Impedisce che altri handler gestiscano questo messaggio
     }
   }
@@ -1714,7 +1709,9 @@ const checkAdminConfigCommand = async (ctx) => {
     // Verifica che l'utente sia l'admin
     if (!isAdmin(ctx.from.id)) {
       logger.warn(`Tentativo non autorizzato di usare /check_admin_config da parte di ${ctx.from.id}`);
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1748,13 +1745,33 @@ Se vuoi creare automaticamente l'account admin, usa il comando:
 `;
     }
     
+    // Crea tastiera inline per le azioni
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔄 Ricontrolla', callback_data: 'recheck_admin' },
+          { text: '📱 Menu principale', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+    
+    if (!admin) {
+      // Aggiungi pulsante per creare l'account admin
+      inlineKeyboard.inline_keyboard.unshift([
+        { text: '✅ Crea account admin', callback_data: 'create_admin_now' }
+      ]);
+    }
+    
     await ctx.reply(responseMessage, {
-      parse_mode: 'Markdown'
+      parse_mode: 'Markdown',
+      reply_markup: inlineKeyboard
     });
     
   } catch (err) {
     logger.error('Errore nel comando check_admin_config:', err);
-    await ctx.reply('❌ Si è verificato un errore durante la verifica della configurazione admin.');
+    await ctx.reply('❌ Si è verificato un errore durante la verifica della configurazione admin.', {
+      ...mainMenuButton().reply_markup
+    });
   }
 };
 
@@ -1772,7 +1789,9 @@ const createAdminAccountCommand = async (ctx) => {
     // Verifica che l'utente sia l'admin
     if (!isAdmin(ctx.from.id)) {
       logger.warn(`Tentativo non autorizzato di usare /create_admin_account da parte di ${ctx.from.id}`);
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1781,7 +1800,9 @@ const createAdminAccountCommand = async (ctx) => {
     
     // Verifica che l'ID admin sia configurato
     if (!adminId) {
-      await ctx.reply('❌ ID Admin non configurato nelle variabili d\'ambiente. Contatta lo sviluppatore.');
+      await ctx.reply('❌ ID Admin non configurato nelle variabili d\'ambiente. Contatta lo sviluppatore.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1794,7 +1815,9 @@ const createAdminAccountCommand = async (ctx) => {
       
 Username: ${admin.username ? '@' + admin.username : 'Non impostato'}
 Nome: ${admin.firstName || 'Non impostato'}
-Saldo: ${admin.balance.toFixed(2)} kWh`);
+Saldo: ${admin.balance.toFixed(2)} kWh`, {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1817,11 +1840,15 @@ Saldo: ${admin.balance.toFixed(2)} kWh`);
 ID: ${adminId}
 Username: ${admin.username ? '@' + admin.username : 'Non impostato'}
 Nome: ${admin.firstName} ${admin.lastName || ''}
-Saldo: ${admin.balance.toFixed(2)} kWh`);
+Saldo: ${admin.balance.toFixed(2)} kWh`, {
+      ...mainMenuButton().reply_markup
+    });
     
   } catch (err) {
     logger.error('Errore nel comando create_admin_account:', err);
-    await ctx.reply('❌ Si è verificato un errore durante la creazione dell\'account admin.');
+    await ctx.reply('❌ Si è verificato un errore durante la creazione dell\'account admin.', {
+      ...mainMenuButton().reply_markup
+    });
   }
 };
 
@@ -1839,7 +1866,9 @@ const systemCheckupCommand = async (ctx) => {
     // Verifica che l'utente sia l'admin
     if (!isAdmin(ctx.from.id)) {
       logger.warn(`Tentativo non autorizzato di usare /system_checkup da parte di ${ctx.from.id}`);
-      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.');
+      await ctx.reply('❌ Solo l\'amministratore può usare questo comando.', {
+        ...mainMenuButton().reply_markup
+      });
       return;
     }
     
@@ -1929,18 +1958,48 @@ ${admin ? `- Saldo admin: ${admin.balance.toFixed(2)} kWh` : ''}
 Sistema ${issues === 0 ? '✅ in buono stato' : issues === fixes ? '⚠️ riparato' : '❌ necessita attenzione'}
 `;
     
+    // Crea tastiera inline per le azioni
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: '🔄 Ricontrolla', callback_data: 'system_checkup_again' },
+          { text: '📱 Menu principale', callback_data: 'back_to_main' }
+        ]
+      ]
+    };
+    
     // Invia il report finale
     await bot.telegram.editMessageText(
       ctx.chat.id, 
       reportMsg.message_id, 
       undefined, 
       reportText,
-      { parse_mode: 'Markdown' }
+      { 
+        parse_mode: 'Markdown',
+        reply_markup: inlineKeyboard
+      }
     );
     
   } catch (err) {
     logger.error('Errore nel comando system_checkup:', err);
-    await ctx.reply('❌ Si è verificato un errore durante il controllo di sistema.');
+    await ctx.reply('❌ Si è verificato un errore durante il controllo di sistema.', {
+      ...mainMenuButton().reply_markup
+    });
+  }
+};
+
+/**
+ * Handler di un comando che non esiste (risponde con suggerimento di usare /help)
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const unknownCommandHandler = async (ctx) => {
+  try {
+    logger.info(`Comando sconosciuto ricevuto da ${ctx.from.id}: ${ctx.message.text}`);
+    
+    await ctx.reply('❓ Comando non riconosciuto. Usa /help per vedere la lista dei comandi disponibili o /menu per visualizzare il menu principale.');
+    
+  } catch (err) {
+    logger.error(`Errore nella gestione di un comando sconosciuto:`, err);
   }
 };
 
@@ -1965,5 +2024,6 @@ module.exports = {
   walletCommand,
   partnerWalletCommand,
   myDonationsCommand,
-  vendorWalletCommand
+  vendorWalletCommand,
+  unknownCommandHandler
 };
