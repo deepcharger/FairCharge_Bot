@@ -7,6 +7,7 @@ const callbacks = require('./handlers/callbacks');
 const middleware = require('./handlers/middleware');
 const logger = require('./utils/logger');
 const { sceneCleanerMiddleware, setupPeriodicCleaner } = require('./utils/sceneCleaner');
+const { registerCommands, setupMenuCallbacks } = require('./utils/commandLoader');
 const mongoose = require('mongoose');
 const { Telegraf } = require('telegraf');
 const fetch = require('node-fetch');
@@ -602,7 +603,7 @@ const setupBot = () => {
   botInstance.command('create_admin_account', commands.createAdminAccountCommand);
   botInstance.command('system_checkup', commands.systemCheckupCommand);
   
-  // MODIFICA: Assicuriamoci che i comandi portafoglio siano registrati correttamente
+  // Assicuriamoci che i comandi portafoglio siano registrati correttamente
   botInstance.command('portafoglio', commands.walletCommand);
   botInstance.command('portafoglio_partner', commands.partnerWalletCommand);
   botInstance.command('portafoglio_venditore', commands.vendorWalletCommand);
@@ -649,6 +650,21 @@ const setupBot = () => {
     }
   });
 
+  // Comando per mostrare il menu principale
+  botInstance.command('menu', async (ctx) => {
+    try {
+      const { createInlineMenus } = require('./utils/commandLoader');
+      const { isAdmin } = require('./config/admin');
+      await createInlineMenus(ctx.from.id, isAdmin(ctx.from.id));
+    } catch (err) {
+      logger.error('Errore nella visualizzazione del menu:', err);
+      await ctx.reply('❌ Si è verificato un errore. Riprova più tardi.');
+    }
+  });
+
+  // Registra i gestori delle callback per i menu
+  setupMenuCallbacks(commands);
+
   // Registra i gestori delle callback
   botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
   botInstance.action(/start_buy_(.+)/, callbacks.startBuyCallback);
@@ -682,6 +698,11 @@ const setupBot = () => {
   botInstance.action(/donate_skip_(.+)/, callbacks.donateSkipCallback);
   botInstance.action('send_manual_request', callbacks.sendManualRequestCallback);
   botInstance.action('cancel_manual_request', callbacks.cancelManualRequestCallback);
+  botInstance.action(/\w+_next_\d+/, callbacks.handlePaginationCallback);
+  botInstance.action(/\w+_prev_\d+/, callbacks.handlePaginationCallback);
+  botInstance.action(/back_to_main/, callbacks.handleMenuCallback);
+  botInstance.action(/wallet_.*/, callbacks.handleMenuCallback);
+  botInstance.action(/admin_.*/, callbacks.handleMenuCallback);
 
   // Gestione dei messaggi nei topic
   botInstance.on(['message', 'channel_post'], middleware.topicMessageHandler);
@@ -741,6 +762,15 @@ const startBot = async (attempt = 1, maxAttempts = LAUNCH_RETRY_COUNT) => {
       
       // Reset del contatore di tentativi dopo successo
       restartAttempts = 0;
+      
+      // Registra i comandi del bot con Telegram (comandi persistenti)
+      try {
+        await registerCommands();
+        logger.info('Comandi persistenti registrati con successo');
+      } catch (cmdErr) {
+        logger.error('Errore nella registrazione dei comandi persistenti:', cmdErr);
+        // Continua comunque anche se non riesce a registrare i comandi
+      }
       
       return true;
     } catch (pollingError) {
