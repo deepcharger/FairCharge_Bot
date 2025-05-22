@@ -613,10 +613,6 @@ const setupBot = () => {
     });
   });
 
-  // Registra i middleware esistenti
-  botInstance.use(middleware.session());
-  botInstance.use(stage.middleware());
-
   // Aggiungi il middleware di pulizia delle scene
   botInstance.use(sceneCleanerMiddleware());
 
