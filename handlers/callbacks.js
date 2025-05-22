@@ -75,1128 +75,6 @@ const buyKwhCallback = async (ctx) => {
     // Conferma la callback query
     await ctx.answerCbQuery();
     
-    // Memorizza l'ID dell'offerta nella sessione
-    ctx.session.paymentNotReceivedOfferId = offerId;
-    
-    // Chiedi al venditore di specificare il problema
-    await ctx.reply(uiElements.formatErrorMessage(
-      'Per favore, descrivi il problema con il pagamento. Questo messaggio verrà inviato all\'acquirente:',
-      false
-    ), {
-      parse_mode: 'HTML'
-    });
-    
-    // Imposta lo stato per gestire la risposta
-    ctx.session.awaitingPaymentIssueDescription = true;
-    
-  } catch (err) {
-    logger.error(`Errore nella callback paymentNotReceived per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce il feedback positivo
- * @param {Object} ctx - Contesto Telegraf
- */
-const feedbackPositiveCallback = async (ctx) => {
-  try {
-    logger.info(`Callback feedback_positive ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username,
-      callbackData: ctx.callbackQuery.data
-    });
-    
-    // Estrai l'ID dell'offerta dalla callback data
-    const offerId = ctx.callbackQuery.data.split('_')[2];
-    
-    // Cerca l'offerta
-    const offer = await Offer.findById(offerId);
-    
-    if (!offer) {
-      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'utente sia l'acquirente o il venditore
-    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
-      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Determina se l'utente è l'acquirente o il venditore
-    const isbuyer = (offer.buyerId === ctx.from.id);
-    
-    // Verifica se l'utente ha già lasciato un feedback
-    if (isbuyer && offer.buyerFeedback) {
-      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
-      return;
-    }
-    
-    if (!isbuyer && offer.sellerFeedback) {
-      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Aggiorna l'offerta con il feedback
-    if (isbuyer) {
-      offer.buyerFeedback = 'positive';
-    } else {
-      offer.sellerFeedback = 'positive';
-    }
-    await offer.save();
-    
-    // Aggiorna la valutazione dell'utente
-    const targetUserId = isbuyer ? offer.sellerId : offer.buyerId;
-    const targetUser = await User.findOne({ userId: targetUserId });
-    
-    if (targetUser) {
-      targetUser.positiveRatings = (targetUser.positiveRatings || 0) + 1;
-      targetUser.totalRatings = (targetUser.totalRatings || 0) + 1;
-      await targetUser.save();
-    }
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery('Feedback positivo registrato!');
-    
-    // Invia un messaggio di conferma
-    await ctx.reply(uiElements.formatSuccessMessage(
-      'Feedback Inviato',
-      `Hai lasciato un feedback positivo per questa ricarica. Grazie per aver contribuito alla reputazione dell'utente!`
-    ), {
-      parse_mode: 'HTML',
-      ...uiElements.mainMenuButton().reply_markup
-    });
-    
-    // Notifica l'utente che ha ricevuto il feedback
-    try {
-      const sender = await User.findOne({ userId: ctx.from.id });
-      const senderName = sender ? (sender.username ? '@' + sender.username : sender.firstName) : 'Un utente';
-      
-      await bot.telegram.sendMessage(
-        targetUserId,
-        uiElements.formatSuccessMessage(
-          'Hai ricevuto un feedback positivo',
-          `${senderName} ha lasciato un feedback positivo per la vostra ricarica. La tua reputazione è aumentata!`
-        ),
-        {
-          parse_mode: 'HTML',
-          ...uiElements.mainMenuButton().reply_markup
-        }
-      );
-    } catch (notifyErr) {
-      logger.error(`Errore nella notifica del feedback all'utente ${targetUserId}:`, notifyErr);
-    }
-    
-  } catch (err) {
-    logger.error(`Errore nella callback feedbackPositive per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce il feedback negativo
- * @param {Object} ctx - Contesto Telegraf
- */
-const feedbackNegativeCallback = async (ctx) => {
-  try {
-    logger.info(`Callback feedback_negative ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username,
-      callbackData: ctx.callbackQuery.data
-    });
-    
-    // Estrai l'ID dell'offerta dalla callback data
-    const offerId = ctx.callbackQuery.data.split('_')[2];
-    
-    // Cerca l'offerta
-    const offer = await Offer.findById(offerId);
-    
-    if (!offer) {
-      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'utente sia l'acquirente o il venditore
-    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
-      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Determina se l'utente è l'acquirente o il venditore
-    const isbuyer = (offer.buyerId === ctx.from.id);
-    
-    // Verifica se l'utente ha già lasciato un feedback
-    if (isbuyer && offer.buyerFeedback) {
-      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
-      return;
-    }
-    
-    if (!isbuyer && offer.sellerFeedback) {
-      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery();
-    
-    // Memorizza nella sessione per raccogliere la motivazione
-    ctx.session.negativeFeedbackOfferId = offerId;
-    ctx.session.negativeFeedbackIsbuyer = isbuyer;
-    
-    // Chiedi la motivazione
-    await ctx.reply(uiElements.formatErrorMessage(
-      'Per favore, indica brevemente il motivo del feedback negativo:',
-      false
-    ), {
-      parse_mode: 'HTML'
-    });
-    
-    // Imposta lo stato per gestire la risposta
-    ctx.session.awaitingNegativeFeedbackReason = true;
-    
-  } catch (err) {
-    logger.error(`Errore nella callback feedbackNegative per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'annullamento di una ricarica
- * @param {Object} ctx - Contesto Telegraf
- */
-const cancelChargeCallback = async (ctx) => {
-  try {
-    logger.info(`Callback cancel_charge ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username,
-      callbackData: ctx.callbackQuery.data
-    });
-    
-    // Estrai l'ID dell'offerta dalla callback data
-    const offerId = ctx.callbackQuery.data.split('_')[2];
-    
-    // Cerca l'offerta
-    const offer = await Offer.findById(offerId);
-    
-    if (!offer) {
-      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'utente sia l'acquirente o il venditore
-    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
-      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'offerta non sia già completata o cancellata
-    if (offer.status === 'completed' || offer.status === 'cancelled') {
-      await ctx.answerCbQuery(`L'offerta è già ${offer.status === 'completed' ? 'completata' : 'cancellata'}`, { show_alert: true });
-      return;
-    }
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery();
-    
-    // Memorizza nella sessione per raccogliere la motivazione
-    ctx.session.cancelChargeOfferId = offerId;
-    
-    // Chiedi la motivazione
-    await ctx.reply(uiElements.formatErrorMessage(
-      'Per favore, indica brevemente il motivo dell\'annullamento:',
-      false
-    ), {
-      parse_mode: 'HTML'
-    });
-    
-    // Imposta lo stato per gestire la risposta
-    ctx.session.awaitingCancelChargeReason = true;
-    
-  } catch (err) {
-    logger.error(`Errore nella callback cancelCharge per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce la donazione di una quantità fissa di kWh
- * @param {Object} ctx - Contesto Telegraf
- */
-const donateFixedCallback = async (ctx) => {
-  try {
-    logger.info(`Callback donate_fixed ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username,
-      callbackData: ctx.callbackQuery.data
-    });
-    
-    // Estrai l'ID dell'offerta dalla callback data
-    const offerId = ctx.callbackQuery.data.split('_')[2];
-    
-    // Cerca l'offerta
-    const offer = await Offer.findById(offerId);
-    
-    if (!offer) {
-      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'utente sia il venditore
-    if (offer.sellerId !== ctx.from.id) {
-      await ctx.answerCbQuery('Non sei autorizzato a fare donazioni per questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'offerta sia completata
-    if (offer.status !== 'completed') {
-      await ctx.answerCbQuery('Puoi donare solo per offerte completate', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'ADMIN_USER_ID sia configurato
-    if (!ADMIN_USER_ID) {
-      await ctx.answerCbQuery('Admin non configurato. Impossibile donare.', { show_alert: true });
-      return;
-    }
-    
-    const donationAmount = 2; // kWh fissi
-    
-    // Crea la donazione
-    try {
-      await donationService.createDonation(offer.sellerId, ADMIN_USER_ID, donationAmount, offer._id);
-      
-      // Conferma la callback query
-      await ctx.answerCbQuery('Donazione effettuata con successo!');
-      
-      // Invia un messaggio di conferma al venditore
-      await ctx.reply(uiElements.formatSuccessMessage(
-        'Donazione Effettuata',
-        `Hai donato ${donationAmount.toFixed(2)} kWh all'amministratore. Questo credito sarà disponibile per le prossime ricariche che l'amministratore effettuerà presso di te.\n\nGrazie per il tuo supporto!`
-      ), {
-        parse_mode: 'HTML',
-        ...uiElements.mainMenuButton().reply_markup
-      });
-      
-      // Notifica l'amministratore
-      try {
-        const seller = await User.findOne({ userId: offer.sellerId });
-        const sellerName = seller ? (seller.username ? '@' + seller.username : seller.firstName) : 'Un venditore';
-        
-        await bot.telegram.sendMessage(
-          ADMIN_USER_ID,
-          uiElements.formatSuccessMessage(
-            'Donazione Ricevuta',
-            `${sellerName} ha donato ${donationAmount.toFixed(2)} kWh al tuo account. Questo credito sarà disponibile per le tue prossime ricariche presso questo venditore.\n\nUsa /le_mie_donazioni per vedere tutte le donazioni ricevute.`
-          ),
-          {
-            parse_mode: 'HTML',
-            ...uiElements.mainMenuButton().reply_markup
-          }
-        );
-      } catch (notifyErr) {
-        logger.error(`Errore nella notifica all'admin ${ADMIN_USER_ID} della donazione:`, notifyErr);
-      }
-      
-    } catch (donationErr) {
-      logger.error(`Errore nella creazione della donazione:`, donationErr);
-      await ctx.answerCbQuery('Si è verificato un errore durante la donazione', { show_alert: true });
-    }
-    
-  } catch (err) {
-    logger.error(`Errore nella callback donateFixed per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce la donazione di una quantità personalizzata di kWh
- * @param {Object} ctx - Contesto Telegraf
- */
-const donateCustomCallback = async (ctx) => {
-  try {
-    logger.info(`Callback donate_custom ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username,
-      callbackData: ctx.callbackQuery.data
-    });
-    
-    // Estrai l'ID dell'offerta dalla callback data
-    const offerId = ctx.callbackQuery.data.split('_')[2];
-    
-    // Cerca l'offerta
-    const offer = await Offer.findById(offerId);
-    
-    if (!offer) {
-      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'utente sia il venditore
-    if (offer.sellerId !== ctx.from.id) {
-      await ctx.answerCbQuery('Non sei autorizzato a fare donazioni per questa offerta', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'offerta sia completata
-    if (offer.status !== 'completed') {
-      await ctx.answerCbQuery('Puoi donare solo per offerte completate', { show_alert: true });
-      return;
-    }
-    
-    // Verifica che l'ADMIN_USER_ID sia configurato
-    if (!ADMIN_USER_ID) {
-      await ctx.answerCbQuery('Admin non configurato. Impossibile donare.', { show_alert: true });
-      return;
-    }
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery();
-    
-    // Memorizza l'offerta ID nella sessione
-    ctx.session.donateCustomOfferId = offerId;
-    
-    // Chiedi la quantità
-    await ctx.reply(uiElements.formatConfirmationMessage(
-      'Donazione Personalizzata',
-      [
-        { label: 'Transazione', value: `ID: ${offerId}` },
-        { label: 'kWh caricati', value: `${offer.kwhAmount.toFixed(2)} kWh` }
-      ]
-    ) + '\n\nInserisci la quantità di kWh che vuoi donare (es. 1.5):', {
-      parse_mode: 'HTML'
-    });
-    
-    // Imposta lo stato per gestire la risposta
-    ctx.session.awaitingDonationAmount = true;
-    
-  } catch (err) {
-    logger.error(`Errore nella callback donateCustom per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce il salto della donazione
- * @param {Object} ctx - Contesto Telegraf
- */
-const donateSkipCallback = async (ctx) => {
-  try {
-    logger.info(`Callback donate_skip ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username,
-      callbackData: ctx.callbackQuery.data
-    });
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery('Nessun problema! Grazie comunque.');
-    
-    // Invia un messaggio di ringraziamento
-    await ctx.reply(uiElements.formatSuccessMessage(
-      'Nessuna Donazione',
-      'Hai scelto di non donare kWh all\'amministratore. Nessun problema, grazie comunque per aver usato il servizio!'
-    ), {
-      parse_mode: 'HTML',
-      ...uiElements.mainMenuButton().reply_markup
-    });
-    
-  } catch (err) {
-    logger.error(`Errore nella callback donateSkip per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'invio di una richiesta manuale
- * @param {Object} ctx - Contesto Telegraf
- */
-const sendManualRequestCallback = async (ctx) => {
-  try {
-    logger.info(`Callback send_manual_request ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username
-    });
-    
-    // Verifica che l'utente sia l'admin
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Solo l\'amministratore può usare questa funzione', { show_alert: true });
-      return;
-    }
-    
-    // Recupera i dati dalla sessione
-    const {
-      manualChargeSellerId,
-      manualChargeDate,
-      manualChargeTime,
-      manualChargeLocation,
-      manualChargeKwh,
-      manualChargeConnector
-    } = ctx.session;
-    
-    if (!manualChargeSellerId || !manualChargeDate || !manualChargeTime || !manualChargeKwh) {
-      await ctx.answerCbQuery('Dati incompleti. Riprova.', { show_alert: true });
-      return;
-    }
-    
-    // Cerca il venditore
-    const seller = await User.findOne({ userId: manualChargeSellerId });
-    
-    if (!seller) {
-      await ctx.answerCbQuery('Venditore non trovato', { show_alert: true });
-      return;
-    }
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery();
-    
-    try {
-      // Recupera annuncio attivo del venditore (se disponibile)
-      const announcement = await Announcement.findOne({
-        userId: manualChargeSellerId,
-        status: 'active',
-        type: 'sell'
-      });
-      
-      // Prezzo di default se non c'è un annuncio
-      const pricePerKwh = announcement ? announcement.pricePerKwh : 0.40;
-      
-      // Crea la nuova offerta
-      const newOffer = new Offer({
-        buyerId: ctx.from.id,
-        sellerId: manualChargeSellerId,
-        status: 'pending',
-        createdAt: new Date(),
-        statusChangedAt: new Date(),
-        pricePerKwh: pricePerKwh,
-        kwhAmount: parseFloat(manualChargeKwh),
-        totalAmount: parseFloat(manualChargeKwh) * pricePerKwh,
-        chargeDate: `${manualChargeDate} ${manualChargeTime}`,
-        additionalInfo: `Richiesta diretta dall'amministratore. Luogo: ${manualChargeLocation || 'Non specificato'}`,
-        connectorType: manualChargeConnector || 'Non specificato'
-      });
-      
-      await newOffer.save();
-      
-      // Pulisci la sessione
-      delete ctx.session.manualChargeSellerId;
-      delete ctx.session.manualChargeDate;
-      delete ctx.session.manualChargeTime;
-      delete ctx.session.manualChargeLocation;
-      delete ctx.session.manualChargeKwh;
-      delete ctx.session.manualChargeConnector;
-      
-      // Invia conferma all'admin
-      await ctx.reply(uiElements.formatSuccessMessage(
-        'Richiesta Inviata',
-        `La tua richiesta di ricarica di ${manualChargeKwh} kWh è stata inviata a ${seller.username ? '@' + seller.username : seller.firstName}.`
-      ), {
-        parse_mode: 'HTML',
-        ...uiElements.mainMenuButton().reply_markup
-      });
-      
-      // Notifica il venditore
-      try {
-        const admin = await User.findOne({ userId: ctx.from.id });
-        const adminName = admin ? (admin.username ? '@' + admin.username : admin.firstName) : 'L\'amministratore';
-        
-        await bot.telegram.sendMessage(
-          seller.userId,
-          uiElements.formatSuccessMessage(
-            'Nuova Richiesta di Ricarica',
-            `${adminName} ha richiesto di ricaricare ${manualChargeKwh} kWh presso di te il ${manualChargeDate} alle ${manualChargeTime}.`
-          ),
-          {
-            parse_mode: 'HTML',
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '✅ Accetta', callback_data: `accept_offer_${newOffer._id}` },
-                  { text: '❌ Rifiuta', callback_data: `reject_offer_${newOffer._id}` }
-                ]
-              ]
-            }
-          }
-        );
-      } catch (notifyErr) {
-        logger.error(`Errore nella notifica al venditore ${seller.userId}:`, notifyErr);
-      }
-      
-    } catch (createErr) {
-      logger.error('Errore nella creazione dell\'offerta manuale:', createErr);
-      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore nella creazione dell\'offerta. Riprova più tardi.', true), {
-        parse_mode: 'HTML',
-        ...uiElements.mainMenuButton().reply_markup
-      });
-    }
-    
-  } catch (err) {
-    logger.error(`Errore nella callback sendManualRequest per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'annullamento di una richiesta manuale
- * @param {Object} ctx - Contesto Telegraf
- */
-const cancelManualRequestCallback = async (ctx) => {
-  try {
-    logger.info(`Callback cancel_manual_request ricevuta da ${ctx.from.id}`, {
-      userId: ctx.from.id,
-      username: ctx.from.username
-    });
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery('Richiesta annullata');
-    
-    // Pulisci la sessione
-    delete ctx.session.manualChargeSellerId;
-    delete ctx.session.manualChargeDate;
-    delete ctx.session.manualChargeTime;
-    delete ctx.session.manualChargeLocation;
-    delete ctx.session.manualChargeKwh;
-    delete ctx.session.manualChargeConnector;
-    
-    // Invia messaggio di conferma
-    await ctx.reply(uiElements.formatErrorMessage('Richiesta di ricarica annullata.', false), {
-      parse_mode: 'HTML',
-      ...uiElements.mainMenuButton().reply_markup
-    });
-    
-  } catch (err) {
-    logger.error(`Errore nella callback cancelManualRequest per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce le callback di paginazione per le liste
- * @param {Object} ctx - Contesto Telegraf
- */
-const handlePaginationCallback = async (ctx) => {
-  try {
-    // Estrai i dati dalla callback query
-    const callbackData = ctx.callbackQuery.data;
-    const [baseData, direction, currentPage] = callbackData.split('_');
-    
-    // Calcola la nuova pagina
-    const page = parseInt(currentPage);
-    const newPage = direction === 'next' ? page + 1 : page - 1;
-    
-    if (newPage < 1) {
-      await ctx.answerCbQuery('Sei già alla prima pagina');
-      return;
-    }
-    
-    // Aggiorna la pagina nella sessione
-    ctx.session[`${baseData}Page`] = newPage;
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery();
-    
-    // A seconda del tipo di dati da paginare, chiama il comando appropriato
-    switch (baseData) {
-      case 'transactions':
-        return await commands.myTransactionsCommand(ctx);
-      case 'offers':
-        return await commands.myChargesCommand(ctx);
-      case 'partners':
-        return await commands.myPartnersCommand(ctx);
-      case 'wallet':
-        return await commands.walletDetailsCommand(ctx);
-      case 'donation':
-        return await commands.myDonationsCommand(ctx);
-      default:
-        await ctx.answerCbQuery('Paginazione non supportata per questo tipo di dati');
-    }
-  } catch (err) {
-    logger.error('Errore nella gestione della paginazione:', err);
-    await ctx.answerCbQuery('Errore nella paginazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce tutte le callback del menu
- * @param {Object} ctx - Contesto Telegraf
- */
-const handleMenuCallback = async (ctx) => {
-  try {
-    const callbackData = ctx.callbackQuery.data;
-    
-    // Conferma la callback query
-    await ctx.answerCbQuery();
-    
-    // Gestisci le callback in base al prefisso
-    if (callbackData.startsWith('wallet_')) {
-      // Callback del portafoglio
-      switch (callbackData) {
-        case 'wallet_sell':
-          return await commands.sellKwhCommand(ctx);
-        case 'wallet_buy':
-          // Qui dovresti implementare la funzionalità per comprare kWh
-          return await ctx.reply('Funzionalità in fase di implementazione');
-        case 'wallet_stats':
-          return await commands.walletStatsCommand(ctx);
-        case 'wallet_transactions':
-          return await commands.myTransactionsCommand(ctx);
-      }
-    } else if (callbackData.startsWith('admin_')) {
-      // Callback del menu admin
-      switch (callbackData) {
-        case 'admin_donations':
-          return await commands.myDonationsCommand(ctx);
-        case 'admin_update_commands':
-          return await commands.updateBotCommandsCommand(ctx);
-        case 'admin_system_checkup':
-          return await commands.systemCheckupCommand(ctx);
-        case 'admin_db_stats':
-          // Simuliamo il comando db_admin stats
-          ctx.message = { text: '/db_admin stats' };
-          return await commands.dbAdminCommand(ctx);
-      }
-    } else if (callbackData === 'back_to_main') {
-      // Torna al menu principale
-      const { createInlineMenus } = require('../utils/commandLoader');
-      await createInlineMenus(ctx.from.id, isAdmin(ctx.from.id));
-      
-      // Eliminiamo il messaggio precedente per evitare confusione
-      try {
-        await ctx.deleteMessage();
-      } catch (err) {
-        logger.warn(`Impossibile eliminare il messaggio del menu:`, err);
-      }
-    } else if (callbackData.startsWith('refresh_')) {
-      // Gestisci i callback di aggiornamento
-      const refreshType = callbackData.split('_')[1];
-      const id = callbackData.split('_')[2];
-      
-      switch (refreshType) {
-        case 'partner':
-          ctx.message = { text: `/portafoglio_partner ${id}` };
-          return await commands.partnerWalletCommand(ctx);
-        case 'vendor':
-          ctx.message = { text: `/portafoglio_venditore ${id}` };
-          return await commands.vendorWalletCommand(ctx);
-        case 'donations':
-          return await commands.myDonationsCommand(ctx);
-      }
-    } else if (callbackData === 'recheck_admin') {
-      return await commands.checkAdminConfigCommand(ctx);
-    } else if (callbackData === 'create_admin_now') {
-      return await commands.createAdminAccountCommand(ctx);
-    } else if (callbackData === 'system_checkup_again') {
-      return await commands.systemCheckupCommand(ctx);
-    }
-    
-  } catch (err) {
-    logger.error(`Errore nella callback di menu per utente ${ctx.from.id}:`, err);
-    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
-  }
-};
-
-// ===== NUOVE CALLBACK PER SICUREZZA E WHITELIST =====
-
-/**
- * Gestisce l'approvazione di un utente sospetto
- */
-const approveUserCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
-    
-    const result = await whitelistService.addToWhitelist(
-      userId, 
-      'Approvato dopo revisione sicurezza', 
-      ctx.from.id
-    );
-    
-    if (result.success) {
-      await ctx.answerCbQuery('Utente approvato!');
-      
-      await ctx.editMessageText(
-        ctx.callbackQuery.message.text + '\n\n✅ <b>APPROVATO</b> da ' + 
-        (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name),
-        { parse_mode: 'HTML' }
-      );
-      
-      // Notifica l'utente
-      try {
-        await bot.telegram.sendMessage(
-          userId,
-          '🎉 <b>Account Approvato!</b>\n\n' +
-          'Il tuo account è stato verificato e approvato.\n' +
-          'Ora puoi utilizzare tutte le funzionalità di FairCharge Pro!',
-          { parse_mode: 'HTML' }
-        );
-      } catch (notifyErr) {
-        logger.warn(`Impossibile notificare l'utente ${userId}:`, notifyErr);
-      }
-      
-    } else {
-      await ctx.answerCbQuery('Errore nell\'approvazione', { show_alert: true });
-    }
-    
-  } catch (err) {
-    logger.error('Errore nella callback approveUser:', err);
-    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce il blocco di un utente sospetto
- */
-const blockUserCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
-    
-    const user = await User.findOne({ userId });
-    
-    if (user) {
-      await user.blockUser('Bloccato dopo revisione sicurezza', ctx.from.id);
-      
-      await ctx.answerCbQuery('Utente bloccato!');
-      
-      await ctx.editMessageText(
-        ctx.callbackQuery.message.text + '\n\n🚫 <b>BLOCCATO</b> da ' + 
-        (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name),
-        { parse_mode: 'HTML' }
-      );
-      
-      // Notifica l'utente
-      try {
-        await bot.telegram.sendMessage(
-          userId,
-          '🚫 <b>Account Bloccato</b>\n\n' +
-          'Il tuo account è stato temporaneamente bloccato per motivi di sicurezza.\n' +
-          'Per maggiori informazioni, contatta il supporto.',
-          { parse_mode: 'HTML' }
-        );
-      } catch (notifyErr) {
-        logger.warn(`Impossibile notificare l'utente ${userId}:`, notifyErr);
-      }
-      
-    } else {
-      await ctx.answerCbQuery('Utente non trovato', { show_alert: true });
-    }
-    
-  } catch (err) {
-    logger.error('Errore nella callback blockUser:', err);
-    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'approvazione VIP di un utente
- */
-const approveVipUserCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[3]);
-    
-    // Prima approva l'utente nella whitelist
-    const whitelistResult = await whitelistService.addToWhitelist(
-      userId, 
-      'Approvato VIP dopo revisione sicurezza', 
-      ctx.from.id
-    );
-    
-    if (whitelistResult.success) {
-      // Poi prova ad aggiungerlo al gruppo VIP
-      const vipResult = await whitelistService.addToVipGroup(userId);
-      
-      if (vipResult.success) {
-        await ctx.answerCbQuery('Utente approvato come VIP!');
-        
-        await ctx.editMessageText(
-          ctx.callbackQuery.message.text + '\n\n👑 <b>APPROVATO VIP</b> da ' + 
-          (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name),
-          { parse_mode: 'HTML' }
-        );
-        
-        // Notifica l'utente con il link VIP
-        try {
-          await bot.telegram.sendMessage(
-            userId,
-            '👑 <b>Account VIP Approvato!</b>\n\n' +
-            'Il tuo account è stato approvato con status VIP.\n' +
-            'Ora puoi utilizzare tutte le funzionalità premium di FairCharge Pro!\n\n' +
-            `🎯 <b>Link gruppo VIP:</b> ${vipResult.inviteLink}\n\n` +
-            'Clicca sul link per unirti al gruppo VIP riservato ai venditori verificati.',
-            { 
-              parse_mode: 'HTML',
-              reply_markup: {
-                inline_keyboard: [
-                  [{ text: '👑 Unisciti al Gruppo VIP', url: vipResult.inviteLink }]
-                ]
-              }
-            }
-          );
-        } catch (notifyErr) {
-          logger.warn(`Impossibile notificare l'utente VIP ${userId}:`, notifyErr);
-        }
-        
-      } else {
-        await ctx.answerCbQuery('Utente approvato ma errore gruppo VIP', { show_alert: true });
-      }
-      
-    } else {
-      await ctx.answerCbQuery('Errore nell\'approvazione', { show_alert: true });
-    }
-    
-  } catch (err) {
-    logger.error('Errore nella callback approveVipUser:', err);
-    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce la visualizzazione dei dettagli utente
- */
-const userDetailsCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
-    
-    const user = await User.findOne({ userId });
-    
-    if (!user) {
-      await ctx.answerCbQuery('Utente non trovato', { show_alert: true });
-      return;
-    }
-    
-    await ctx.answerCbQuery();
-    
-    let details = `👤 <b>Dettagli Utente</b>\n\n`;
-    details += `<b>Nome:</b> ${user.firstName}`;
-    if (user.lastName) details += ` ${user.lastName}`;
-    details += `\n<b>ID:</b> ${user.userId}`;
-    details += `\n<b>Username:</b> ${user.username ? '@' + user.username : 'N/A'}`;
-    details += `\n<b>Registrato:</b> ${user.registrationDate.toLocaleDateString('it-IT')}`;
-    details += `\n<b>Whitelist:</b> ${user.isWhitelisted ? '✅ Approvato' : '❌ Standard'}`;
-    details += `\n<b>Bloccato:</b> ${user.isBlocked ? '🚫 Sì' : '✅ No'}`;
-    details += `\n<b>Feedback:</b> ${user.positiveRatings}/${user.totalRatings}`;
-    
-    if (user.positiveRatings > 0) {
-      const percentage = user.getPositivePercentage();
-      details += ` (${percentage}%)`;
-    }
-    
-    details += `\n<b>Risk Score:</b> ${user.riskScore || 0}/10`;
-    details += `\n<b>Risk Level:</b> ${(user.riskLevel || 'low').toUpperCase()}`;
-    
-    if (user.securityFlags && user.securityFlags.length > 0) {
-      details += `\n\n<b>🚨 Security Flags (${user.securityFlags.length}):</b>`;
-      user.securityFlags.slice(-3).forEach(flag => {
-        const icon = flag.severity === 'high' ? '🔴' : flag.severity === 'medium' ? '🟡' : '🟢';
-        details += `\n${icon} ${flag.description}`;
-      });
-    }
-    
-    await ctx.reply(details, { 
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '✅ Approva', callback_data: `approve_user_${userId}` },
-            { text: '❌ Blocca', callback_data: `block_user_${userId}` }
-          ],
-          [
-            { text: '👑 Approva VIP', callback_data: `approve_vip_user_${userId}` }
-          ],
-          [
-            { text: '🔍 Analizza Sicurezza', callback_data: `analyze_security_${userId}` }
-          ]
-        ]
-      }
-    });
-    
-  } catch (err) {
-    logger.error('Errore nella callback userDetails:', err);
-    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'analisi di sicurezza di un utente
- */
-const analyzeSecurityCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
-    
-    await ctx.answerCbQuery();
-    
-    // Simula il comando di analisi sicurezza
-    const securityService = require('../services/securityService');
-    ctx.message = { text: `/analyze_security ${userId}` };
-    
-    return await securityService.analyzeUserSecurityCommand(ctx);
-    
-  } catch (err) {
-    logger.error('Errore nella callback analyzeSecurity:', err);
-    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'aggiunta al gruppo VIP
- */
-const addToVipCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[3]);
-    
-    const vipResult = await whitelistService.addToVipGroup(userId);
-    
-    if (vipResult.success) {
-      await ctx.answerCbQuery('Link VIP creato!');
-      
-      const user = await User.findOne({ userId });
-      const userName = user ? (user.username ? '@' + user.username : user.firstName) : 'L\'utente';
-      
-      await ctx.reply(
-        `👑 <b>Link VIP creato per ${userName}</b>\n\n` +
-        `Link: ${vipResult.inviteLink}\n\n` +
-        `Invia questo link all'utente per permettergli di unirsi al gruppo VIP.`,
-        { 
-          parse_mode: 'HTML',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '📤 Invia link all\'utente', callback_data: `send_vip_link_${userId}` }]
-            ]
-          }
-        }
-      );
-      
-    } else {
-      await ctx.answerCbQuery('Errore nella creazione del link VIP', { show_alert: true });
-    }
-    
-  } catch (err) {
-    logger.error('Errore nella callback addToVip:', err);
-    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
-  }
-};
-
-/**
- * Gestisce l'invio del link VIP all'utente
- */
-const sendVipLinkCallback = async (ctx) => {
-  try {
-    if (!isAdmin(ctx.from.id)) {
-      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
-      return;
-    }
-    
-    const userId = parseInt(ctx.callbackQuery.data.split('_')[3]);
-    
-    const vipResult = await whitelistService.addToVipGroup(userId);
-    
-    if (vipResult.success) {
-      // Invia il link all'utente
-      try {
-        await bot.telegram.sendMessage(
-          userId,
-          '👑 <b>Invito Gruppo VIP</b>\n\n' +
-          'Sei stato invitato a unirti al gruppo VIP di FairCharge Pro!\n\n' +
-          'Questo gruppo è riservato ai venditori verificati e offre:\n' +
-          '• Accesso a funzionalità premium\n' +
-          '• Supporto prioritario\n' +
-          '• Networking con altri venditori verificati\n\n' +
-          'Clicca sul bottone per unirti:',
-          { 
-            parse_mode: 'HTML',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '👑 Unisciti al Gruppo VIP', url: vipResult.inviteLink }]
-              ]
-            }
-          }
-        );
-        
-        await ctx.answerCbQuery('Link VIP inviato all\'utente!');
-        
-      } catch (sendErr) {
-        logger.error(`Errore nell'invio del link VIP all'utente ${userId}:`, sendErr);
-        await ctx.answerCbQuery('Errore nell\'invio del link', { show_alert: true });
-      }
-      
-    } else {
-      await ctx.answerCbQuery('Errore nella creazione del link VIP', { show_alert: true });
-    }
-    
-module.exports = {
-  // Callback esistenti per il flusso di acquisto/vendita kWh
-  buyKwhCallback,
-  startBuyCallback,
-  connectorTypeCallback,
-  publishSellCallback,
-  cancelSellCallback,
-  acceptConditionsCallback,
-  cancelBuyCallback,
-  sendRequestCallback,
-  acceptOfferCallback,
-  rejectOfferCallback,
-  readyToChargeCallback,
-  chargingStartedCallback,
-  chargingOkCallback,
-  chargingIssuesCallback,
-  chargingCompletedCallback,
-  confirmKwhCallback,
-  disputeKwhCallback,
-  setPaymentCallback,
-  verifyPaymentCallback,
-  confirmPaymentRequestCallback,
-  cancelPaymentRequestCallback,
-  paymentSentCallback,
-  paymentConfirmedCallback,
-  paymentNotReceivedCallback,
-  feedbackPositiveCallback,
-  feedbackNegativeCallback,
-  cancelChargeCallback,
-  donateFixedCallback,
-  donateCustomCallback,
-  donateSkipCallback,
-  sendManualRequestCallback,
-  cancelManualRequestCallback,
-  handlePaginationCallback,
-  handleMenuCallback,
-  
-  // Nuove callback per sicurezza e whitelist
-  approveUserCallback,
-  blockUserCallback,
-  approveVipUserCallback,
-  userDetailsCallback,
-  analyzeSecurityCallback,
-  addToVipCallback,
-  sendVipLinkCallback
-};
-    
     // Visualizza i dettagli dell'annuncio in un nuovo messaggio
     const message = `${uiElements.formatProgressMessage(1, 5, "Procedura di Acquisto kWh")}Hai selezionato questo annuncio:\n\n${formatSellAnnouncement(announcement, seller)}`;
     
@@ -2186,8 +1064,8 @@ const confirmPaymentRequestCallback = async (ctx) => {
     
     // Estrai l'ID dell'offerta e l'importo dalla callback data
     const parts = ctx.callbackQuery.data.split('_');
-    const offerId = parts[2];
-    const amount = parseFloat(parts[3]);
+    const offerId = parts[3];
+    const amount = parseFloat(parts[4]);
     
     // Cerca l'offerta
     const offer = await Offer.findById(offerId);
@@ -2215,7 +1093,7 @@ const confirmPaymentRequestCallback = async (ctx) => {
     // Ora chiedi al venditore di specificare i dettagli di pagamento
     ctx.session.paymentDetailsOfferId = offerId;
     
-    await ctx.reply('Ora specifica il metodo di pagamento preferito (es. Bonifico, PayPal, Satispay, etc.):', {
+    await ctx.reply('Ora specifica il metodo di pagamento preferito:', {
       reply_markup: {
         inline_keyboard: [
           [{ text: 'Bonifico bancario', callback_data: 'payment_method_bank' }],
@@ -2246,7 +1124,7 @@ const cancelPaymentRequestCallback = async (ctx) => {
     });
     
     // Estrai l'ID dell'offerta dalla callback data
-    const offerId = ctx.callbackQuery.data.split('_')[2];
+    const offerId = ctx.callbackQuery.data.split('_')[3];
     
     // Conferma la callback query
     await ctx.answerCbQuery('Richiesta di pagamento annullata');
@@ -2254,9 +1132,7 @@ const cancelPaymentRequestCallback = async (ctx) => {
     // Chiedi nuovamente l'importo
     ctx.session.paymentOfferId = offerId;
     
-    await ctx.reply('Per favore, inserisci un nuovo importo totale da pagare in €:', {
-      parse_mode: 'HTML'
-    });
+    await ctx.reply('Per favore, inserisci un nuovo importo totale da pagare in €:');
     
     // Imposta lo stato per gestire la risposta
     ctx.session.awaitingPaymentAmount = true;
@@ -2472,7 +1348,7 @@ const paymentConfirmedCallback = async (ctx) => {
       }
     }
     
-    // Chiedi feedback
+    // Chiedi feedback dopo 30 secondi
     setTimeout(async () => {
       try {
         // Chiedi feedback all'acquirente
@@ -2509,7 +1385,7 @@ const paymentConfirmedCallback = async (ctx) => {
       } catch (feedbackErr) {
         logger.error(`Errore nell'invio della richiesta di feedback per l'offerta ${offerId}:`, feedbackErr);
       }
-    }, 30000); // Chiedi feedback dopo 30 secondi
+    }, 30000);
     
     // Chiedi al venditore se vuole donare kWh all'admin (tranne se l'admin è l'acquirente)
     if (offer.buyerId !== ADMIN_USER_ID && ADMIN_USER_ID) {
@@ -2560,3 +1436,1135 @@ const paymentNotReceivedCallback = async (ctx) => {
     
     // Conferma la callback query
     await ctx.answerCbQuery();
+    
+    // Memorizza l'ID dell'offerta nella sessione
+    ctx.session.paymentNotReceivedOfferId = offerId;
+    
+    // Chiedi al venditore di specificare il problema
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, descrivi il problema con il pagamento. Questo messaggio verrà inviato all\'acquirente:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingPaymentIssueDescription = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback paymentNotReceived per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il feedback positivo
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const feedbackPositiveCallback = async (ctx) => {
+  try {
+    logger.info(`Callback feedback_positive ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente o il venditore
+    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Determina se l'utente è l'acquirente o il venditore
+    const isBuyer = (offer.buyerId === ctx.from.id);
+    
+    // Verifica se l'utente ha già lasciato un feedback
+    if (isBuyer && offer.buyerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    if (!isBuyer && offer.sellerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Aggiorna l'offerta con il feedback
+    if (isBuyer) {
+      offer.buyerFeedback = 'positive';
+    } else {
+      offer.sellerFeedback = 'positive';
+    }
+    await offer.save();
+    
+    // Aggiorna la valutazione dell'utente
+    const targetUserId = isBuyer ? offer.sellerId : offer.buyerId;
+    const targetUser = await User.findOne({ userId: targetUserId });
+    
+    if (targetUser) {
+      targetUser.positiveRatings = (targetUser.positiveRatings || 0) + 1;
+      targetUser.totalRatings = (targetUser.totalRatings || 0) + 1;
+      await targetUser.save();
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Feedback positivo registrato!');
+    
+    // Invia un messaggio di conferma
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Feedback Inviato',
+      `Hai lasciato un feedback positivo per questa ricarica. Grazie per aver contribuito alla reputazione dell'utente!`
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+    // Notifica l'utente che ha ricevuto il feedback
+    try {
+      const sender = await User.findOne({ userId: ctx.from.id });
+      const senderName = sender ? (sender.username ? '@' + sender.username : sender.firstName) : 'Un utente';
+      
+      await bot.telegram.sendMessage(
+        targetUserId,
+        uiElements.formatSuccessMessage(
+          'Hai ricevuto un feedback positivo',
+          `${senderName} ha lasciato un feedback positivo per la vostra ricarica. La tua reputazione è aumentata!`
+        ),
+        {
+          parse_mode: 'HTML',
+          ...uiElements.mainMenuButton().reply_markup
+        }
+      );
+    } catch (notifyErr) {
+      logger.error(`Errore nella notifica del feedback all'utente ${targetUserId}:`, notifyErr);
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback feedbackPositive per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il feedback negativo
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const feedbackNegativeCallback = async (ctx) => {
+  try {
+    logger.info(`Callback feedback_negative ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente o il venditore
+    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Determina se l'utente è l'acquirente o il venditore
+    const isBuyer = (offer.buyerId === ctx.from.id);
+    
+    // Verifica se l'utente ha già lasciato un feedback
+    if (isBuyer && offer.buyerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    if (!isBuyer && offer.sellerFeedback) {
+      await ctx.answerCbQuery('Hai già lasciato un feedback per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza nella sessione per raccogliere la motivazione
+    ctx.session.negativeFeedbackOfferId = offerId;
+    ctx.session.negativeFeedbackIsBuyer = isBuyer;
+    
+    // Chiedi la motivazione
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, indica brevemente il motivo del feedback negativo:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingNegativeFeedbackReason = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback feedbackNegative per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento di una ricarica
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelChargeCallback = async (ctx) => {
+  try {
+    logger.info(`Callback cancel_charge ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia l'acquirente o il venditore
+    if (offer.buyerId !== ctx.from.id && offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a gestire questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta non sia già completata o cancellata
+    if (offer.status === 'completed' || offer.status === 'cancelled') {
+      await ctx.answerCbQuery(`L'offerta è già ${offer.status === 'completed' ? 'completata' : 'cancellata'}`, { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza nella sessione per raccogliere la motivazione
+    ctx.session.cancelChargeOfferId = offerId;
+    
+    // Chiedi la motivazione
+    await ctx.reply(uiElements.formatErrorMessage(
+      'Per favore, indica brevemente il motivo dell\'annullamento:',
+      false
+    ), {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingCancelChargeReason = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback cancelCharge per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la donazione di una quantità fissa di kWh
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const donateFixedCallback = async (ctx) => {
+  try {
+    logger.info(`Callback donate_fixed ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const parts = ctx.callbackQuery.data.split('_');
+    const donationAmount = parseFloat(parts[1]); // Es: donate_2_offerId
+    const offerId = parts[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a fare donazioni per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia completata
+    if (offer.status !== 'completed') {
+      await ctx.answerCbQuery('Puoi donare solo per offerte completate', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'ADMIN_USER_ID sia configurato
+    if (!ADMIN_USER_ID) {
+      await ctx.answerCbQuery('Admin non configurato. Impossibile donare.', { show_alert: true });
+      return;
+    }
+    
+    // Crea la donazione
+    try {
+      await donationService.createDonation(offer.sellerId, ADMIN_USER_ID, donationAmount, offer._id);
+      
+      // Conferma la callback query
+      await ctx.answerCbQuery('Donazione effettuata con successo!');
+      
+      // Invia un messaggio di conferma al venditore
+      await ctx.reply(uiElements.formatSuccessMessage(
+        'Donazione Effettuata',
+        `Hai donato ${donationAmount.toFixed(2)} kWh all'amministratore. Questo credito sarà disponibile per le prossime ricariche che l'amministratore effettuerà presso di te.\n\nGrazie per il tuo supporto!`
+      ), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      
+      // Notifica l'amministratore
+      try {
+        const seller = await User.findOne({ userId: offer.sellerId });
+        const sellerName = seller ? (seller.username ? '@' + seller.username : seller.firstName) : 'Un venditore';
+        
+        await bot.telegram.sendMessage(
+          ADMIN_USER_ID,
+          uiElements.formatSuccessMessage(
+            'Donazione Ricevuta',
+            `${sellerName} ha donato ${donationAmount.toFixed(2)} kWh al tuo account. Questo credito sarà disponibile per le tue prossime ricariche presso questo venditore.\n\nUsa /le_mie_donazioni per vedere tutte le donazioni ricevute.`
+          ),
+          {
+            parse_mode: 'HTML',
+            ...uiElements.mainMenuButton().reply_markup
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica all'admin ${ADMIN_USER_ID} della donazione:`, notifyErr);
+      }
+      
+    } catch (donationErr) {
+      logger.error(`Errore nella creazione della donazione:`, donationErr);
+      await ctx.answerCbQuery('Si è verificato un errore durante la donazione', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback donateFixed per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la donazione di una quantità personalizzata di kWh
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const donateCustomCallback = async (ctx) => {
+  try {
+    logger.info(`Callback donate_custom ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Estrai l'ID dell'offerta dalla callback data
+    const offerId = ctx.callbackQuery.data.split('_')[2];
+    
+    // Cerca l'offerta
+    const offer = await Offer.findById(offerId);
+    
+    if (!offer) {
+      await ctx.answerCbQuery('Offerta non trovata', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'utente sia il venditore
+    if (offer.sellerId !== ctx.from.id) {
+      await ctx.answerCbQuery('Non sei autorizzato a fare donazioni per questa offerta', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'offerta sia completata
+    if (offer.status !== 'completed') {
+      await ctx.answerCbQuery('Puoi donare solo per offerte completate', { show_alert: true });
+      return;
+    }
+    
+    // Verifica che l'ADMIN_USER_ID sia configurato
+    if (!ADMIN_USER_ID) {
+      await ctx.answerCbQuery('Admin non configurato. Impossibile donare.', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Memorizza l'offerta ID nella sessione
+    ctx.session.donateCustomOfferId = offerId;
+    
+    // Chiedi la quantità
+    await ctx.reply(uiElements.formatConfirmationMessage(
+      'Donazione Personalizzata',
+      [
+        { label: 'Transazione', value: `ID: ${offerId}` },
+        { label: 'kWh caricati', value: `${offer.kwhAmount.toFixed(2)} kWh` }
+      ]
+    ) + '\n\nInserisci la quantità di kWh che vuoi donare (es. 1.5):', {
+      parse_mode: 'HTML'
+    });
+    
+    // Imposta lo stato per gestire la risposta
+    ctx.session.awaitingDonationAmount = true;
+    
+  } catch (err) {
+    logger.error(`Errore nella callback donateCustom per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il salto della donazione
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const donateSkipCallback = async (ctx) => {
+  try {
+    logger.info(`Callback donate_skip ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username,
+      callbackData: ctx.callbackQuery.data
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Nessun problema! Grazie comunque.');
+    
+    // Invia un messaggio di ringraziamento
+    await ctx.reply(uiElements.formatSuccessMessage(
+      'Nessuna Donazione',
+      'Hai scelto di non donare kWh all\'amministratore. Nessun problema, grazie comunque per aver usato il servizio!'
+    ), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback donateSkip per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'invio di una richiesta manuale
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const sendManualRequestCallback = async (ctx) => {
+  try {
+    logger.info(`Callback send_manual_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Verifica che l'utente sia l'admin
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Solo l\'amministratore può usare questa funzione', { show_alert: true });
+      return;
+    }
+    
+    // Recupera i dati dalla sessione
+    const {
+      manualChargeSellerId,
+      manualChargeDate,
+      manualChargeTime,
+      manualChargeLocation,
+      manualChargeKwh,
+      manualChargeConnector
+    } = ctx.session;
+    
+    if (!manualChargeSellerId || !manualChargeDate || !manualChargeTime || !manualChargeKwh) {
+      await ctx.answerCbQuery('Dati incompleti. Riprova.', { show_alert: true });
+      return;
+    }
+    
+    // Cerca il venditore
+    const seller = await User.findOne({ userId: manualChargeSellerId });
+    
+    if (!seller) {
+      await ctx.answerCbQuery('Venditore non trovato', { show_alert: true });
+      return;
+    }
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    try {
+      // Recupera annuncio attivo del venditore (se disponibile)
+      const announcement = await Announcement.findOne({
+        userId: manualChargeSellerId,
+        status: 'active',
+        type: 'sell'
+      });
+      
+      // Prezzo di default se non c'è un annuncio
+      const pricePerKwh = announcement ? announcement.pricePerKwh : 0.40;
+      
+      // Crea la nuova offerta
+      const newOffer = new Offer({
+        buyerId: ctx.from.id,
+        sellerId: manualChargeSellerId,
+        status: 'pending',
+        createdAt: new Date(),
+        statusChangedAt: new Date(),
+        pricePerKwh: pricePerKwh,
+        kwhAmount: parseFloat(manualChargeKwh),
+        totalAmount: parseFloat(manualChargeKwh) * pricePerKwh,
+        chargeDate: `${manualChargeDate} ${manualChargeTime}`,
+        additionalInfo: `Richiesta diretta dall'amministratore. Luogo: ${manualChargeLocation || 'Non specificato'}`,
+        connectorType: manualChargeConnector || 'Non specificato'
+      });
+      
+      await newOffer.save();
+      
+      // Pulisci la sessione
+      delete ctx.session.manualChargeSellerId;
+      delete ctx.session.manualChargeDate;
+      delete ctx.session.manualChargeTime;
+      delete ctx.session.manualChargeLocation;
+      delete ctx.session.manualChargeKwh;
+      delete ctx.session.manualChargeConnector;
+      
+      // Invia conferma all'admin
+      await ctx.reply(uiElements.formatSuccessMessage(
+        'Richiesta Inviata',
+        `La tua richiesta di ricarica di ${manualChargeKwh} kWh è stata inviata a ${seller.username ? '@' + seller.username : seller.firstName}.`
+      ), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+      
+      // Notifica il venditore
+      try {
+        const admin = await User.findOne({ userId: ctx.from.id });
+        const adminName = admin ? (admin.username ? '@' + admin.username : admin.firstName) : 'L\'amministratore';
+        
+        await bot.telegram.sendMessage(
+          seller.userId,
+          uiElements.formatSuccessMessage(
+            'Nuova Richiesta di Ricarica',
+            `${adminName} ha richiesto di ricaricare ${manualChargeKwh} kWh presso di te il ${manualChargeDate} alle ${manualChargeTime}.`
+          ),
+          {
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Accetta', callback_data: `accept_offer_${newOffer._id}` },
+                  { text: '❌ Rifiuta', callback_data: `reject_offer_${newOffer._id}` }
+                ]
+              ]
+            }
+          }
+        );
+      } catch (notifyErr) {
+        logger.error(`Errore nella notifica al venditore ${seller.userId}:`, notifyErr);
+      }
+      
+    } catch (createErr) {
+      logger.error('Errore nella creazione dell\'offerta manuale:', createErr);
+      await ctx.reply(uiElements.formatErrorMessage('Si è verificato un errore nella creazione dell\'offerta. Riprova più tardi.', true), {
+        parse_mode: 'HTML',
+        ...uiElements.mainMenuButton().reply_markup
+      });
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback sendManualRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'annullamento di una richiesta manuale
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const cancelManualRequestCallback = async (ctx) => {
+  try {
+    logger.info(`Callback cancel_manual_request ricevuta da ${ctx.from.id}`, {
+      userId: ctx.from.id,
+      username: ctx.from.username
+    });
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery('Richiesta annullata');
+    
+    // Pulisci la sessione
+    delete ctx.session.manualChargeSellerId;
+    delete ctx.session.manualChargeDate;
+    delete ctx.session.manualChargeTime;
+    delete ctx.session.manualChargeLocation;
+    delete ctx.session.manualChargeKwh;
+    delete ctx.session.manualChargeConnector;
+    
+    // Invia messaggio di conferma
+    await ctx.reply(uiElements.formatErrorMessage('Richiesta di ricarica annullata.', false), {
+      parse_mode: 'HTML',
+      ...uiElements.mainMenuButton().reply_markup
+    });
+    
+  } catch (err) {
+    logger.error(`Errore nella callback cancelManualRequest per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce le callback di paginazione per le liste
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const handlePaginationCallback = async (ctx) => {
+  try {
+    // Estrai i dati dalla callback query
+    const callbackData = ctx.callbackQuery.data;
+    const [baseData, direction, currentPage] = callbackData.split('_');
+    
+    // Calcola la nuova pagina
+    const page = parseInt(currentPage);
+    const newPage = direction === 'next' ? page + 1 : page - 1;
+    
+    if (newPage < 1) {
+      await ctx.answerCbQuery('Sei già alla prima pagina');
+      return;
+    }
+    
+    // Aggiorna la pagina nella sessione
+    ctx.session[`${baseData}Page`] = newPage;
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // A seconda del tipo di dati da paginare, chiama il comando appropriato
+    const commands = require('./commands');
+    switch (baseData) {
+      case 'transactions':
+        return await commands.myTransactionsCommand(ctx);
+      case 'offers':
+        return await commands.myChargesCommand(ctx);
+      case 'partners':
+        return await commands.myPartnersCommand(ctx);
+      case 'wallet':
+        return await commands.walletDetailsCommand(ctx);
+      case 'donation':
+        return await commands.myDonationsCommand(ctx);
+      default:
+        await ctx.answerCbQuery('Paginazione non supportata per questo tipo di dati');
+    }
+  } catch (err) {
+    logger.error('Errore nella gestione della paginazione:', err);
+    await ctx.answerCbQuery('Errore nella paginazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce tutte le callback del menu
+ * @param {Object} ctx - Contesto Telegraf
+ */
+const handleMenuCallback = async (ctx) => {
+  try {
+    const callbackData = ctx.callbackQuery.data;
+    
+    // Conferma la callback query
+    await ctx.answerCbQuery();
+    
+    // Gestisci le callback in base al prefisso
+    if (callbackData.startsWith('wallet_')) {
+      // Callback del portafoglio
+      const commands = require('./commands');
+      switch (callbackData) {
+        case 'wallet_sell':
+          return await commands.sellKwhCommand(ctx);
+        case 'wallet_buy':
+          // Qui dovresti implementare la funzionalità per comprare kWh
+          return await ctx.reply('Funzionalità in fase di implementazione');
+        case 'wallet_stats':
+          return await commands.walletStatsCommand(ctx);
+        case 'wallet_transactions':
+          return await commands.myTransactionsCommand(ctx);
+      }
+    } else if (callbackData.startsWith('admin_')) {
+      // Callback del menu admin
+      const commands = require('./commands');
+      switch (callbackData) {
+        case 'admin_donations':
+          return await commands.myDonationsCommand(ctx);
+        case 'admin_update_commands':
+          return await commands.updateBotCommandsCommand(ctx);
+        case 'admin_system_checkup':
+          return await commands.systemCheckupCommand(ctx);
+        case 'admin_db_stats':
+          // Simuliamo il comando db_admin stats
+          ctx.message = { text: '/db_admin stats' };
+          return await commands.dbAdminCommand(ctx);
+      }
+    } else if (callbackData === 'back_to_main') {
+      // Torna al menu principale
+      const { createInlineMenus } = require('../utils/commandLoader');
+      await createInlineMenus(ctx.from.id, isAdmin(ctx.from.id));
+      
+      // Eliminiamo il messaggio precedente per evitare confusione
+      try {
+        await ctx.deleteMessage();
+      } catch (err) {
+        logger.warn(`Impossibile eliminare il messaggio del menu:`, err);
+      }
+    } else if (callbackData.startsWith('refresh_')) {
+      // Gestisci i callback di aggiornamento
+      const refreshType = callbackData.split('_')[1];
+      const id = callbackData.split('_')[2];
+      
+      const commands = require('./commands');
+      switch (refreshType) {
+        case 'partner':
+          ctx.message = { text: `/portafoglio_partner ${id}` };
+          return await commands.partnerWalletCommand(ctx);
+        case 'vendor':
+          ctx.message = { text: `/portafoglio_venditore ${id}` };
+          return await commands.vendorWalletCommand(ctx);
+        case 'donations':
+          return await commands.myDonationsCommand(ctx);
+      }
+    } else if (callbackData === 'recheck_admin') {
+      return await commands.checkAdminConfigCommand(ctx);
+    } else if (callbackData === 'create_admin_now') {
+      return await commands.createAdminAccountCommand(ctx);
+    } else if (callbackData === 'system_checkup_again') {
+      return await commands.systemCheckupCommand(ctx);
+    }
+    
+  } catch (err) {
+    logger.error(`Errore nella callback di menu per utente ${ctx.from.id}:`, err);
+    await ctx.answerCbQuery('Si è verificato un errore. Per favore, riprova più tardi.', { show_alert: true });
+  }
+};
+
+// ===== NUOVE CALLBACK PER SICUREZZA E WHITELIST =====
+
+/**
+ * Gestisce l'approvazione di un utente sospetto
+ */
+const approveUserCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
+    
+    const result = await whitelistService.addToWhitelist(
+      userId, 
+      'Approvato dopo revisione sicurezza', 
+      ctx.from.id
+    );
+    
+    if (result.success) {
+      await ctx.answerCbQuery('Utente approvato!');
+      
+      await ctx.editMessageText(
+        ctx.callbackQuery.message.text + '\n\n✅ <b>APPROVATO</b> da ' + 
+        (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name),
+        { parse_mode: 'HTML' }
+      );
+      
+      // Notifica l'utente
+      try {
+        await bot.telegram.sendMessage(
+          userId,
+          '🎉 <b>Account Approvato!</b>\n\n' +
+          'Il tuo account è stato verificato e approvato.\n' +
+          'Ora puoi utilizzare tutte le funzionalità di FairCharge Pro!',
+          { parse_mode: 'HTML' }
+        );
+      } catch (notifyErr) {
+        logger.warn(`Impossibile notificare l'utente ${userId}:`, notifyErr);
+      }
+      
+    } else {
+      await ctx.answerCbQuery('Errore nell\'approvazione', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error('Errore nella callback approveUser:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce il blocco di un utente sospetto
+ */
+const blockUserCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
+    
+    const user = await User.findOne({ userId });
+    
+    if (user) {
+      await user.blockUser('Bloccato dopo revisione sicurezza', ctx.from.id);
+      
+      await ctx.answerCbQuery('Utente bloccato!');
+      
+      await ctx.editMessageText(
+        ctx.callbackQuery.message.text + '\n\n🚫 <b>BLOCCATO</b> da ' + 
+        (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name),
+        { parse_mode: 'HTML' }
+      );
+      
+      // Notifica l'utente
+      try {
+        await bot.telegram.sendMessage(
+          userId,
+          '🚫 <b>Account Bloccato</b>\n\n' +
+          'Il tuo account è stato temporaneamente bloccato per motivi di sicurezza.\n' +
+          'Per maggiori informazioni, contatta il supporto.',
+          { parse_mode: 'HTML' }
+        );
+      } catch (notifyErr) {
+        logger.warn(`Impossibile notificare l'utente ${userId}:`, notifyErr);
+      }
+      
+    } else {
+      await ctx.answerCbQuery('Utente non trovato', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error('Errore nella callback blockUser:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'approvazione VIP di un utente
+ */
+const approveVipUserCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[3]);
+    
+    // Prima approva l'utente nella whitelist
+    const whitelistResult = await whitelistService.addToWhitelist(
+      userId, 
+      'Approvato VIP dopo revisione sicurezza', 
+      ctx.from.id
+    );
+    
+    if (whitelistResult.success) {
+      // Poi prova ad aggiungerlo al gruppo VIP
+      const vipResult = await whitelistService.addToVipGroup(userId);
+      
+      if (vipResult.success) {
+        await ctx.answerCbQuery('Utente approvato come VIP!');
+        
+        await ctx.editMessageText(
+          ctx.callbackQuery.message.text + '\n\n👑 <b>APPROVATO VIP</b> da ' + 
+          (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name),
+          { parse_mode: 'HTML' }
+        );
+        
+        // Notifica l'utente con il link VIP
+        try {
+          await bot.telegram.sendMessage(
+            userId,
+            '👑 <b>Account VIP Approvato!</b>\n\n' +
+            'Il tuo account è stato approvato con status VIP.\n' +
+            'Ora puoi utilizzare tutte le funzionalità premium di FairCharge Pro!\n\n' +
+            `🎯 <b>Link gruppo VIP:</b> ${vipResult.inviteLink}\n\n` +
+            'Clicca sul link per unirti al gruppo VIP riservato ai venditori verificati.',
+            { 
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '👑 Unisciti al Gruppo VIP', url: vipResult.inviteLink }]
+                ]
+              }
+            }
+          );
+        } catch (notifyErr) {
+          logger.warn(`Impossibile notificare l'utente VIP ${userId}:`, notifyErr);
+        }
+        
+      } else {
+        await ctx.answerCbQuery('Utente approvato ma errore gruppo VIP', { show_alert: true });
+      }
+      
+    } else {
+      await ctx.answerCbQuery('Errore nell\'approvazione', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error('Errore nella callback approveVipUser:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce la visualizzazione dei dettagli utente
+ */
+const userDetailsCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
+    
+    const user = await User.findOne({ userId });
+    
+    if (!user) {
+      await ctx.answerCbQuery('Utente non trovato', { show_alert: true });
+      return;
+    }
+    
+    await ctx.answerCbQuery();
+    
+    let details = `👤 <b>Dettagli Utente</b>\n\n`;
+    details += `<b>Nome:</b> ${user.firstName}`;
+    if (user.lastName) details += ` ${user.lastName}`;
+    details += `\n<b>ID:</b> ${user.userId}`;
+    details += `\n<b>Username:</b> ${user.username ? '@' + user.username : 'N/A'}`;
+    details += `\n<b>Registrato:</b> ${user.registrationDate.toLocaleDateString('it-IT')}`;
+    details += `\n<b>Whitelist:</b> ${user.isWhitelisted ? '✅ Approvato' : '❌ Standard'}`;
+    details += `\n<b>Bloccato:</b> ${user.isBlocked ? '🚫 Sì' : '✅ No'}`;
+    details += `\n<b>Feedback:</b> ${user.positiveRatings}/${user.totalRatings}`;
+    
+    if (user.positiveRatings > 0) {
+      const percentage = user.getPositivePercentage();
+      details += ` (${percentage}%)`;
+    }
+    
+    details += `\n<b>Risk Score:</b> ${user.riskScore || 0}/10`;
+    details += `\n<b>Risk Level:</b> ${(user.riskLevel || 'low').toUpperCase()}`;
+    
+    if (user.securityFlags && user.securityFlags.length > 0) {
+      details += `\n\n<b>🚨 Security Flags (${user.securityFlags.length}):</b>`;
+      user.securityFlags.slice(-3).forEach(flag => {
+        const icon = flag.severity === 'high' ? '🔴' : flag.severity === 'medium' ? '🟡' : '🟢';
+        details += `\n${icon} ${flag.description}`;
+      });
+    }
+    
+    await ctx.reply(details, { 
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Approva', callback_data: `approve_user_${userId}` },
+            { text: '❌ Blocca', callback_data: `block_user_${userId}` }
+          ],
+          [
+            { text: '👑 Approva VIP', callback_data: `approve_vip_user_${userId}` }
+          ],
+          [
+            { text: '🔍 Analizza Sicurezza', callback_data: `analyze_security_${userId}` }
+          ]
+        ]
+      }
+    });
+    
+  } catch (err) {
+    logger.error('Errore nella callback userDetails:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'analisi di sicurezza di un utente
+ */
+const analyzeSecurityCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[2]);
+    
+    await ctx.answerCbQuery();
+    
+    // Simula il comando di analisi sicurezza
+    const securityService = require('../services/securityService');
+    ctx.message = { text: `/analyze_security ${userId}` };
+    
+    return await securityService.analyzeUserSecurityCommand(ctx);
+    
+  } catch (err) {
+    logger.error('Errore nella callback analyzeSecurity:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'aggiunta al gruppo VIP
+ */
+const addToVipCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[3]);
+    
+    const vipResult = await whitelistService.addToVipGroup(userId);
+    
+    if (vipResult.success) {
+      await ctx.answerCbQuery('Link VIP creato!');
+      
+      const user = await User.findOne({ userId });
+      const userName = user ? (user.username ? '@' + user.username : user.firstName) : 'L\'utente';
+      
+      await ctx.reply(
+        `👑 <b>Link VIP creato per ${userName}</b>\n\n` +
+        `Link: ${vipResult.inviteLink}\n\n` +
+        `Invia questo link all'utente per permettergli di unirsi al gruppo VIP.`,
+        { 
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '📤 Invia link all\'utente', callback_data: `send_vip_link_${userId}` }]
+            ]
+          }
+        }
+      );
+      
+    } else {
+      await ctx.answerCbQuery('Errore nella creazione del link VIP', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error('Errore nella callback addToVip:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+/**
+ * Gestisce l'invio del link VIP all'utente
+ */
+const sendVipLinkCallback = async (ctx) => {
+  try {
+    if (!isAdmin(ctx.from.id)) {
+      await ctx.answerCbQuery('Non autorizzato', { show_alert: true });
+      return;
+    }
+    
+    const userId = parseInt(ctx.callbackQuery.data.split('_')[3]);
+    
+    const vipResult = await whitelistService.addToVipGroup(userId);
+    
+    if (vipResult.success) {
+      // Invia il link all'utente
+      try {
+        await bot.telegram.sendMessage(
+          userId,
+          '👑 <b>Invito Gruppo VIP</b>\n\n' +
+          'Sei stato invitato a unirti al gruppo VIP di FairCharge Pro!\n\n' +
+          'Questo gruppo è riservato ai venditori verificati e offre:\n' +
+          '• Accesso a funzionalità premium\n' +
+          '• Supporto prioritario\n' +
+          '• Networking con altri venditori verificati\n\n' +
+          'Clicca sul bottone per unirti:',
+          { 
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '👑 Unisciti al Gruppo VIP', url: vipResult.inviteLink }]
+              ]
+            }
+          }
+        );
+        
+        await ctx.answerCbQuery('Link VIP inviato all\'utente!');
+        
+      } catch (sendErr) {
+        logger.error(`Errore nell'invio del link VIP all'utente ${userId}:`, sendErr);
+        await ctx.answerCbQuery('Errore nell\'invio del link', { show_alert: true });
+      }
+      
+    } else {
+      await ctx.answerCbQuery('Errore nella creazione del link VIP', { show_alert: true });
+    }
+    
+  } catch (err) {
+    logger.error('Errore nella callback sendVipLink:', err);
+    await ctx.answerCbQuery('Errore nell\'operazione', { show_alert: true });
+  }
+};
+
+module.exports = {
+  // Callback esistenti per il flusso di acquisto/vendita kWh
+  buyKwhCallback,
+  startBuyCallback,
+  connectorTypeCallback,
+  publishSellCallback,
+  cancelSellCallback,
+  acceptConditionsCallback,
+  cancelBuyCallback,
+  sendRequestCallback,
+  acceptOfferCallback,
+  rejectOfferCallback,
+  readyToChargeCallback,
+  chargingStartedCallback,
+  chargingOkCallback,
+  chargingIssuesCallback,
+  chargingCompletedCallback,
+  confirmKwhCallback,
+  disputeKwhCallback,
+  setPaymentCallback,
+  verifyPaymentCallback,
+  confirmPaymentRequestCallback,
+  cancelPaymentRequestCallback,
+  paymentSentCallback,
+  paymentConfirmedCallback,
+  paymentNotReceivedCallback,
+  feedbackPositiveCallback,
+  feedbackNegativeCallback,
+  cancelChargeCallback,
+  donateFixedCallback,
+  donateCustomCallback,
+  donateSkipCallback,
+  sendManualRequestCallback,
+  cancelManualRequestCallback,
+  handlePaginationCallback,
+  handleMenuCallback,
+  
+  // Nuove callback per sicurezza e whitelist
+  approveUserCallback,
+  blockUserCallback,
+  approveVipUserCallback,
+  userDetailsCallback,
+  analyzeSecurityCallback,
+  addToVipCallback,
+  sendVipLinkCallback
+};
