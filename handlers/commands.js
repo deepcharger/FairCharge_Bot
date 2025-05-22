@@ -29,6 +29,48 @@ const startCommand = async (ctx) => {
       username: ctx.from.username
     });
     
+    // PRIMA verifica se l'utente può accedere al bot
+    const { verifyUserMembership } = require('../services/memberVerificationService');
+    
+    // Se l'utente è admin, permetti sempre l'accesso
+    if (!isAdmin(ctx.from.id)) {
+      // Verifica la membership per utenti non admin
+      const verification = await verifyUserMembership(ctx.from.id);
+      
+      if (!verification.isAuthorized) {
+        logger.warn(`Accesso negato al comando /start per utente ${ctx.from.id}`, {
+          userId: ctx.from.id,
+          username: ctx.from.username,
+          reason: verification.reason || 'Non membro di gruppi autorizzati'
+        });
+        
+        await ctx.reply(
+          '🚫 <b>Accesso Limitato</b>\n\n' +
+          'Questo bot è riservato ai membri dei nostri gruppi ufficiali.\n\n' +
+          'Per utilizzare FairCharge Pro devi essere membro di almeno uno dei nostri gruppi autorizzati.\n\n' +
+          'Se pensi che questo sia un errore, contatta un amministratore.',
+          { 
+            parse_mode: 'HTML',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '📞 Contatta Support', url: 'https://t.me/your_support_username' }]
+              ]
+            }
+          }
+        );
+        
+        return; // Blocca l'esecuzione
+      }
+      
+      logger.info(`Accesso autorizzato per utente ${ctx.from.id}`, {
+        userId: ctx.from.id,
+        username: ctx.from.username,
+        isVipMember: verification.isVipMember,
+        memberOfGroups: verification.memberOf.length
+      });
+    }
+    
+    // Solo se autorizzato, continua con la registrazione e il messaggio di benvenuto
     const user = await userService.registerUser(ctx.from);
     
     // Controllo se è presente un parametro start (deep linking)
