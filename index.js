@@ -850,10 +850,45 @@ const startBot = async (attempt = 1, maxAttempts = LAUNCH_RETRY_COUNT) => {
       // Reset del contatore di tentativi dopo successo
       restartAttempts = 0;
       
-      // Registra i comandi del bot con Telegram (comandi persistenti)
+      // REGISTRAZIONE COMANDI MIGLIORATA
       try {
-        await registerCommands();
-        logger.info('Comandi persistenti registrati con successo');
+        logger.info('🔧 Avvio registrazione comandi persistenti...');
+        
+        // Attendi che il bot sia completamente attivo
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const commandSuccess = await registerCommands();
+        if (commandSuccess) {
+          logger.info('✅ Comandi persistenti registrati con successo');
+          
+          // Verifica che i comandi siano effettivamente attivi
+          try {
+            const commands = await botInstance.telegram.getMyCommands();
+            logger.info(`📋 Comandi verificati: ${commands.length} comandi registrati`, {
+              commands: commands.map(cmd => cmd.command).join(', ')
+            });
+            
+            // Se nessun comando è registrato, prova un secondo tentativo
+            if (commands.length === 0) {
+              logger.warn('⚠️ Nessun comando trovato, secondo tentativo...');
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              
+              const { forceCommandUpdate } = require('./utils/commandLoader');
+              const retrySuccess = await forceCommandUpdate();
+              
+              if (retrySuccess) {
+                logger.info('✅ Comandi registrati al secondo tentativo');
+              } else {
+                logger.error('❌ Impossibile registrare i comandi dopo il retry');
+              }
+            }
+          } catch (verifyErr) {
+            logger.error('Errore nella verifica dei comandi:', verifyErr);
+          }
+        } else {
+          logger.error('❌ Fallimento nella registrazione dei comandi persistenti');
+          // Non interrompere l'avvio per questo
+        }
       } catch (cmdErr) {
         logger.error('Errore nella registrazione dei comandi persistenti:', cmdErr);
         // Continua comunque anche se non riesce a registrare i comandi
