@@ -14,6 +14,26 @@ const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 
+// ===== IMPORT NUOVI SERVIZI DI SICUREZZA =====
+const memberVerificationService = require('./services/memberVerificationService');
+const securityService = require('./services/securityService');
+const whitelistService = require('./services/whitelistService');
+const adminCommands = require('./handlers/commands/adminCommands');
+
+// Import nuove callback per sicurezza e whitelist
+const {
+  approveUserCallback,
+  blockUserCallback,
+  approveVipUserCallback,
+  userDetailsCallback,
+  analyzeSecurityCallback,
+  addToVipCallback,
+  sendVipLinkCallback
+} = require('./handlers/callbacks');
+
+// Import middleware di sicurezza
+const { applyBaseMiddleware, applySecurityMiddleware } = require('./handlers/middleware');
+
 // Configurazioni per la stabilità in produzione
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '60000', 10);
@@ -87,12 +107,24 @@ const ensureAdminRegistered = async () => {
         balance: 0,
         registrationDate: new Date(),
         positiveRatings: 0,
-        totalRatings: 0
+        totalRatings: 0,
+        isWhitelisted: true, // Admin è automaticamente in whitelist
+        whitelistReason: 'Account amministratore',
+        whitelistedAt: new Date()
       });
       
       await newAdmin.save();
       logger.info(`Account admin creato con successo (ID: ${ADMIN_USER_ID})`);
     } else {
+      // Assicurati che l'admin sia in whitelist
+      if (!admin.isWhitelisted) {
+        admin.isWhitelisted = true;
+        admin.whitelistReason = 'Account amministratore';
+        admin.whitelistedAt = new Date();
+        await admin.save();
+        logger.info(`Admin aggiunto alla whitelist (ID: ${ADMIN_USER_ID})`);
+      }
+      
       logger.debug(`Account admin trovato (ID: ${ADMIN_USER_ID}), saldo attuale: ${admin.balance.toFixed(2)} kWh`);
     }
   } catch (err) {
@@ -558,6 +590,20 @@ const setupBot = () => {
     }
   });
   
+  // ===== APPLICA MIDDLEWARE DI BASE =====
+  logger.info('🔧 Applicazione middleware di base...');
+  applyBaseMiddleware(botInstance);
+
+  // ===== APPLICA MIDDLEWARE DI SICUREZZA =====
+  logger.info('🛡️ Applicazione sistema di sicurezza...');
+  applySecurityMiddleware(botInstance, {
+    enforceGroupMembership: true,  // Abilita controllo membership
+    requireVip: false,            // Non richiedere VIP per tutti i comandi
+    requireWhitelist: false,      // Non richiedere whitelist per tutti i comandi
+    skipSecurityCheck: false      // Abilita controlli sicurezza
+  });
+
+  // ===== MIDDLEWARE ESISTENTI =====
   // Middleware di logging per tutte le richieste
   botInstance.use((ctx, next) => {
     const start = Date.now();
@@ -567,7 +613,7 @@ const setupBot = () => {
     });
   });
 
-  // Registra i middleware
+  // Registra i middleware esistenti
   botInstance.use(middleware.session());
   botInstance.use(stage.middleware());
 
@@ -586,7 +632,10 @@ const setupBot = () => {
     return next();
   });
 
-  // Registra i gestori dei comandi
+  // ===== REGISTRAZIONE COMANDI PRINCIPALI =====
+  logger.info('📋 Registrazione comandi principali...');
+  
+  // Comandi base esistenti
   botInstance.start(commands.startCommand);
   botInstance.command('vendi_kwh', commands.sellKwhCommand);
   botInstance.command('le_mie_ricariche', commands.myChargesCommand);
@@ -603,38 +652,35 @@ const setupBot = () => {
   botInstance.command('create_admin_account', commands.createAdminAccountCommand);
   botInstance.command('system_checkup', commands.systemCheckupCommand);
   
-  // Assicuriamoci che i comandi portafoglio siano registrati correttamente
+  // Comandi portafoglio esistenti
   botInstance.command('portafoglio', commands.walletCommand);
   botInstance.command('portafoglio_partner', commands.partnerWalletCommand);
   botInstance.command('portafoglio_venditore', commands.vendorWalletCommand);
   botInstance.command('le_mie_donazioni', commands.myDonationsCommand);
 
-  // Aggiungiamo handler provvisorio di debug per i comandi portafoglio - AGGIUNTO
-  botInstance.command('debug_portafoglio', async (ctx) => {
-    try {
-      logger.info(`Test comando debug_portafoglio da ${ctx.from.id}`);
-      await ctx.reply('⏳ Test debug portafoglio in corso...');
-      
-      // Verifica connessione MongoDB
-      const isConnected = mongoose.connection.readyState === 1;
-      await ctx.reply(`Connessione MongoDB: ${isConnected ? '✅ Connesso' : '❌ Non connesso'}`);
-      
-      // Verifica disponibilità service
-      const walletService = require('./services/walletService');
-      await ctx.reply(`Service disponibile: ${walletService ? '✅ OK' : '❌ Non disponibile'}`);
-      
-      // Verifica userId
-      await ctx.reply(`User ID: ${ctx.from.id}`);
-      
-      // Test completo
-      await ctx.reply('Test completato. Prova ora a usare /portafoglio');
-    } catch (err) {
-      logger.error(`Errore test debug portafoglio:`, err);
-      await ctx.reply(`❌ Errore nel test: ${err.message}`);
-    }
-  });
+  // ===== NUOVI COMANDI AMMINISTRATIVI =====
+  logger.info('👑 Registrazione comandi amministrativi...');
+  
+  // Comandi admin principali
+  botInstance.command('admin_help', adminCommands.adminHelpCommand);
+  botInstance.command('security_stats', adminCommands.securityStatsCommand);
+  botInstance.command('suspicious_users', adminCommands.suspiciousUsersCommand);
+  botInstance.command('membership_stats', adminCommands.membershipStatsCommand);
+  botInstance.command('user_stats', adminCommands.userStatsCommand);
+  botInstance.command('system_status', adminCommands.systemStatusCommand);
+  
+  // Comandi di gestione whitelist
+  botInstance.command('manage_whitelist', whitelistService.manageWhitelistCommand);
+  
+  // Comandi di sicurezza
+  botInstance.command('analyze_security', securityService.analyzeUserSecurityCommand);
+  
+  // Comandi di verifica membership
+  botInstance.command('check_membership', memberVerificationService.checkUserMembershipCommand);
+  botInstance.command('test_group_config', memberVerificationService.testGroupConfigCommand);
 
-  // Nuovo handler per il comando speciale inizia_acquisto_ID
+  // ===== COMANDI ESISTENTI AGGIUNTIVI =====
+  // Handler per il comando speciale inizia_acquisto_ID
   botInstance.command(/inizia_acquisto_(.+)/, async (ctx) => {
     try {
       const announcementId = ctx.match[1];
@@ -662,10 +708,38 @@ const setupBot = () => {
     }
   });
 
+  // Handler di debug per portafoglio
+  botInstance.command('debug_portafoglio', async (ctx) => {
+    try {
+      logger.info(`Test comando debug_portafoglio da ${ctx.from.id}`);
+      await ctx.reply('⏳ Test debug portafoglio in corso...');
+      
+      // Verifica connessione MongoDB
+      const isConnected = mongoose.connection.readyState === 1;
+      await ctx.reply(`Connessione MongoDB: ${isConnected ? '✅ Connesso' : '❌ Non connesso'}`);
+      
+      // Verifica disponibilità service
+      const walletService = require('./services/walletService');
+      await ctx.reply(`Service disponibile: ${walletService ? '✅ OK' : '❌ Non disponibile'}`);
+      
+      // Verifica userId
+      await ctx.reply(`User ID: ${ctx.from.id}`);
+      
+      // Test completo
+      await ctx.reply('Test completato. Prova ora a usare /portafoglio');
+    } catch (err) {
+      logger.error(`Errore test debug portafoglio:`, err);
+      await ctx.reply(`❌ Errore nel test: ${err.message}`);
+    }
+  });
+
+  // ===== REGISTRAZIONE CALLBACK ESISTENTI =====
+  logger.info('🎯 Registrazione callback handlers...');
+  
   // Registra i gestori delle callback per i menu
   setupMenuCallbacks(commands);
 
-  // Registra i gestori delle callback
+  // Callback esistenti per il flusso di trading
   botInstance.action(/buy_kwh_(.+)/, callbacks.buyKwhCallback);
   botInstance.action(/start_buy_(.+)/, callbacks.startBuyCallback);
   botInstance.action(/current_(.+)/, callbacks.connectorTypeCallback);
@@ -698,12 +772,29 @@ const setupBot = () => {
   botInstance.action(/donate_skip_(.+)/, callbacks.donateSkipCallback);
   botInstance.action('send_manual_request', callbacks.sendManualRequestCallback);
   botInstance.action('cancel_manual_request', callbacks.cancelManualRequestCallback);
+  
+  // Callback di paginazione e menu
   botInstance.action(/\w+_next_\d+/, callbacks.handlePaginationCallback);
   botInstance.action(/\w+_prev_\d+/, callbacks.handlePaginationCallback);
   botInstance.action(/back_to_main/, callbacks.handleMenuCallback);
   botInstance.action(/wallet_.*/, callbacks.handleMenuCallback);
   botInstance.action(/admin_.*/, callbacks.handleMenuCallback);
 
+  // ===== NUOVE CALLBACK PER SICUREZZA E WHITELIST =====
+  logger.info('🔒 Registrazione callback di sicurezza...');
+  
+  // Callback per approvazione/blocco utenti
+  botInstance.action(/^approve_user_\d+$/, approveUserCallback);
+  botInstance.action(/^block_user_\d+$/, blockUserCallback);
+  botInstance.action(/^approve_vip_user_\d+$/, approveVipUserCallback);
+  botInstance.action(/^user_details_\d+$/, userDetailsCallback);
+  botInstance.action(/^analyze_security_\d+$/, analyzeSecurityCallback);
+  botInstance.action(/^add_to_vip_\d+$/, addToVipCallback);
+  botInstance.action(/^send_vip_link_\d+$/, sendVipLinkCallback);
+
+  // ===== GESTORI DI CONTENUTO =====
+  logger.info('📝 Applicazione gestori di contenuto...');
+  
   // Gestione dei messaggi nei topic
   botInstance.on(['message', 'channel_post'], middleware.topicMessageHandler);
 
@@ -713,7 +804,7 @@ const setupBot = () => {
   // Gestione dei messaggi con foto
   botInstance.on('photo', middleware.photoMessageHandler);
 
-  // Gestione degli errori
+  // ===== GESTIONE ERRORI =====
   botInstance.catch((err, ctx) => {
     logger.error(`Errore per ${ctx?.updateType || 'unknown'}:`, err);
   });
@@ -771,6 +862,30 @@ const startBot = async (attempt = 1, maxAttempts = LAUNCH_RETRY_COUNT) => {
         logger.error('Errore nella registrazione dei comandi persistenti:', cmdErr);
         // Continua comunque anche se non riesce a registrare i comandi
       }
+      
+      // ===== LOGGING SISTEMA DI SICUREZZA =====
+      logger.info('🛡️ Sistema di sicurezza caricato', {
+        authorizedGroups: memberVerificationService.getAuthorizedGroups().length,
+        vipGroupConfigured: !!process.env.VIP_GROUP_ID,
+        adminConfigured: !!process.env.ADMIN_USER_ID,
+        securityEnabled: true,
+        whitelistEnabled: true,
+        membershipCheckEnabled: true
+      });
+      
+      // ===== LOG DI AVVIO COMPLETATO =====
+      logger.info('🎉 FairCharge Pro Bot avviato con successo!');
+      logger.info('📊 Statistiche di avvio:', {
+        timestamp: new Date().toISOString(),
+        nodeVersion: process.version,
+        botToken: process.env.BOT_TOKEN ? 'Configurato' : 'Mancante',
+        database: 'Connesso',
+        gruppiAutorizzati: memberVerificationService.getAuthorizedGroups().length,
+        middleware: 'Applicati',
+        comandi: 'Registrati',
+        callbacks: 'Registrate',
+        sicurezza: 'Attiva'
+      });
       
       return true;
     } catch (pollingError) {
